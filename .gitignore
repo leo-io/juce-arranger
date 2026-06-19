@@ -1,0 +1,13 @@
+build/
+cmake-build*/
+Debug/
+Release/
+*.user
+*.user.os
+*.sln
+*.suo
+*.vcxproj*
+*.db
+__pycache__/
+*.pyc
+.vs/
