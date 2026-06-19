@@ -16,7 +16,8 @@ target_sources(juce-arranger
         Main.cpp
         MainComponent.cpp
         TimelineComponent.cpp
-        BarGridComponent.cpp)
+        BarGridComponent.cpp
+        MonoThumbnailComponent.cpp)
 
 target_compile_definitions(juce-arranger
     PRIVATE
