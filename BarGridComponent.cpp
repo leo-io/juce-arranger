@@ -42,6 +42,87 @@ void BarGridComponent::refresh()
 }
 
 //==============================================================================
+// setPlayingBar — used by ArrangementView follow-transport
+
+void BarGridComponent::setPlayingBar (std::optional<int> barIndex)
+{
+    try
+    {
+        if (barIndex.has_value())
+        {
+            int clamped = juce::jlimit (0, (int)model.bars.size() - 1, barIndex.value());
+            if (clamped != barIndex.value())
+                barIndex = clamped;
+        }
+
+        if (playingBar != barIndex)
+        {
+            playingBar = barIndex;
+            repaint();
+        }
+    }
+    catch (const std::exception& e) { juce::Logger::writeToLog ("BarGridComponent::setPlayingBar: " + juce::String (e.what())); }
+    catch (...) { juce::Logger::writeToLog ("BarGridComponent::setPlayingBar: unknown exception"); }
+}
+
+//==============================================================================
+// setPlayheadPosition — smooth transport position for playhead line
+
+void BarGridComponent::setPlayheadPosition (std::optional<double> timeSeconds)
+{
+    try
+    {
+        if (playheadTime != timeSeconds)
+        {
+            // Save old rect for targeted repaint
+            auto oldRect = playheadCellRect (contentWidth);
+
+            playheadTime = timeSeconds;
+
+            // Repaint old + new playhead locations
+            auto newRect = playheadCellRect (contentWidth);
+            auto dirtyRect = oldRect.getUnion (newRect);
+            if (!dirtyRect.isEmpty())
+                repaint (dirtyRect.expanded (Spacing::playheadWidth + 2, 0));
+            else
+                repaint();
+        }
+    }
+    catch (const std::exception& e) { juce::Logger::writeToLog ("BarGridComponent::setPlayheadPosition: " + juce::String (e.what())); }
+    catch (...) { juce::Logger::writeToLog ("BarGridComponent::setPlayheadPosition: unknown exception"); }
+}
+
+//==============================================================================
+// playheadCellRect — bounding rect of the playhead line for dirty-rect repaint
+
+juce::Rectangle<int> BarGridComponent::playheadCellRect (int viewportWidth) const
+{
+    if (!playheadTime.has_value() || model.bars.empty())
+        return {};
+
+    double pos = playheadTime.value();
+
+    for (size_t i = 0; i < model.bars.size(); ++i)
+    {
+        if (pos >= model.bars[i].startTime && pos < model.bars[i].endTime)
+        {
+            auto cellBounds = model.cellBounds ((int)i, viewportWidth);
+
+            const auto& bar = model.bars[i];
+            double barDuration = bar.endTime - bar.startTime;
+            double fraction = (barDuration > 0.0) ? ((pos - bar.startTime) / barDuration) : 0.0;
+            fraction = juce::jlimit (0.0, 1.0, fraction);
+
+            int x = cellBounds.getX() + (int)(cellBounds.getWidth() * fraction);
+            int lineW = (transportSource.isPlaying() ? Spacing::playheadWidth : 1);
+            return { x - lineW - 2, cellBounds.getY(), lineW * 2 + 4, cellBounds.getHeight() };
+        }
+    }
+
+    return {};
+}
+
+//==============================================================================
 // Paint
 
 void BarGridComponent::paint (juce::Graphics& g)
@@ -60,8 +141,8 @@ void BarGridComponent::paint (juce::Graphics& g)
             return;
         }
 
-        int cw = model.cellWidth (contentWidth);
-        auto detail = model.labelDetailFor (cw);
+        bool isSectionMode = (model.mode == GridMode::Section);
+        bool isWholeSong   = (model.mode == GridMode::WholeSong);
 
         // Draw each bar cell
         for (size_t i = 0; i < model.bars.size(); ++i)
@@ -73,14 +154,38 @@ void BarGridComponent::paint (juce::Graphics& g)
             g.setColour (bar.colour.withAlpha (0.40f));
             g.fillRect (cellBounds);
 
-            // Cell outline (1px divider)
-            g.setColour (Palette::divider);
-            g.drawRect (cellBounds, 1);
+            if (isWholeSong)
+            {
+                // WholeSong: hairline at section boundaries only
+                if (bar.isSegmentStart)
+                {
+                    g.setColour (Palette::gridStrong);
+                    g.fillRect (cellBounds.getX(), cellBounds.getY(),
+                                Spacing::sectionDivider, cellBounds.getHeight());
+                }
+            }
+            else
+            {
+                // Cell outline (hairline)
+                g.setColour (Palette::divider);
+                g.drawRect (cellBounds, 1);
+
+                // Bold divider at section boundaries
+                if (bar.isSegmentStart)
+                {
+                    g.setColour (Palette::gridStrong);
+                    g.fillRect (cellBounds.getX(), cellBounds.getY(),
+                                Spacing::sectionDivider, cellBounds.getHeight());
+                }
+            }
 
             // Label colour: contrasting with the cell fill
             juce::Colour labelColour = bar.colour.withAlpha (0.40f).contrasting (0.6f);
             g.setColour (labelColour);
-            g.setFont (10.0f);
+
+            // Determine label density: in Section mode use per-row cell width
+            int perCellWidth = cellBounds.getWidth();
+            auto detail = model.labelDetailFor (perCellWidth);
 
             // Draw bar number based on density
             bool drawNumber = false;
@@ -88,27 +193,69 @@ void BarGridComponent::paint (juce::Graphics& g)
             {
                 drawNumber = true;
             }
-            else if (detail == LabelDetail::SparseNumber && bar.index1Based % 4 == 1)
+            else if (detail == LabelDetail::SparseNumber)
             {
-                drawNumber = true;
+                if (isWholeSong)
+                    drawNumber = (bar.index1Based % 8 == 1); // even sparser in song overview
+                else if (isSectionMode)
+                    drawNumber = (bar.isSegmentStart); // first bar of section
+                else
+                    drawNumber = (bar.index1Based % 4 == 1);
             }
 
             if (drawNumber)
             {
+                g.setFont (isWholeSong ? 8.0f : 10.0f);
                 auto numberBounds = cellBounds.reduced (2);
                 g.drawText (juce::String (bar.index1Based),
                            numberBounds,
                            juce::Justification::topLeft, false);
             }
 
-            // Draw segment label only on first bar of run, and only if detail allows
-            if (bar.isSegmentStart && detail == LabelDetail::NumberAndLabel && !bar.segmentLabel.isEmpty())
+            // Draw segment label
+            if (!isSectionMode && !isWholeSong)
             {
-                auto labelBounds = cellBounds.reduced (2);
-                labelBounds.removeFromTop (12); // Leave space for the bar number
-                g.drawText (bar.segmentLabel,
-                           labelBounds,
-                           juce::Justification::topLeft, true);
+                // Existing behaviour: label on first bar of run
+                if (bar.isSegmentStart && detail == LabelDetail::NumberAndLabel && !bar.segmentLabel.isEmpty())
+                {
+                    g.setFont (10.0f);
+                    auto labelBounds = cellBounds.reduced (2);
+                    labelBounds.removeFromTop (12);
+                    g.drawText (bar.segmentLabel,
+                               labelBounds,
+                               juce::Justification::topLeft, true);
+                }
+            }
+        }
+
+        // Section mode: draw section label once per row, right-aligned
+        if (isSectionMode && !model.rowSpans.empty())
+        {
+            for (size_t r = 0; r < model.rowSpans.size(); ++r)
+            {
+                const auto& span = model.rowSpans[r];
+                if (span.firstBar >= 0 && span.firstBar < (int)model.bars.size())
+                {
+                    const auto& firstBar = model.bars[span.firstBar];
+                    if (!firstBar.segmentLabel.isEmpty())
+                    {
+                        // Right-align the section name on the last cell of the row
+                        int lastBarIdx = span.firstBar + span.barCount - 1;
+                        if (lastBarIdx >= 0 && lastBarIdx < (int)model.bars.size())
+                        {
+                            auto lastBounds = model.cellBounds (lastBarIdx, contentWidth);
+                            auto rowRect = juce::Rectangle<int> (
+                                lastBounds.getX(), lastBounds.getY(),
+                                lastBounds.getWidth(), Spacing::rowHeight);
+
+                            g.setColour (Palette::textSecondary.withAlpha (0.7f));
+                            g.setFont (10.0f);
+                            g.drawText (firstBar.segmentLabel,
+                                       rowRect.reduced (4, 0),
+                                       juce::Justification::centredRight, true);
+                        }
+                    }
+                }
             }
         }
 
@@ -136,8 +283,17 @@ void BarGridComponent::paint (juce::Graphics& g)
             // Group selected bars by row and draw per-row outline
             for (int row = 0; row < model.rowCount(); ++row)
             {
-                int rowStart = row * model.barsPerRow;
-                int rowEnd = rowStart + model.barsPerRow;
+                int rowStart, rowEnd;
+                if (isSectionMode && !model.rowSpans.empty() && row < (int)model.rowSpans.size())
+                {
+                    rowStart = model.rowSpans[row].firstBar;
+                    rowEnd = rowStart + model.rowSpans[row].barCount;
+                }
+                else
+                {
+                    rowStart = row * model.barsPerRow;
+                    rowEnd = rowStart + model.barsPerRow;
+                }
 
                 int selStartInRow = juce::jmax (rowStart, firstBar);
                 int selEndInRow = juce::jmin (rowEnd - 1, lastBar);
@@ -162,6 +318,64 @@ void BarGridComponent::paint (juce::Graphics& g)
                     // Optional: draw a faint inner glow
                     g.setColour (Palette::accent.withAlpha (0.2f));
                     g.drawRect (selRect.reduced (1), 1);
+                }
+            }
+        }
+
+        // Playing-bar highlight (follow-transport) — soft fill only, no left-edge bar
+        if (playingBar.has_value() && transportSource.isPlaying())
+        {
+            int pbIdx = playingBar.value();
+            if (pbIdx >= 0 && pbIdx < (int)model.bars.size())
+            {
+                auto cellBounds = model.cellBounds (pbIdx, contentWidth);
+                // Subtle background fill to indicate "this row is live"
+                g.setColour (Palette::accent.withAlpha (0.25f));
+                g.fillRect (cellBounds);
+            }
+        }
+
+        //==========================================================================
+        // Playhead line + triangle cap (drawn last, above everything)
+        //==========================================================================
+        if (playheadTime.has_value())
+        {
+            double pos = playheadTime.value();
+
+            for (size_t i = 0; i < model.bars.size(); ++i)
+            {
+                if (pos >= model.bars[i].startTime && pos < model.bars[i].endTime)
+                {
+                    const auto& bar = model.bars[i];
+                    auto cellBounds = model.cellBounds ((int)i, contentWidth);
+
+                    double barDuration = bar.endTime - bar.startTime;
+                    double fraction = (barDuration > 0.0) ? ((pos - bar.startTime) / barDuration) : 0.0;
+                    fraction = juce::jlimit (0.0, 1.0, fraction);
+
+                    int x = cellBounds.getX() + (int)(cellBounds.getWidth() * fraction);
+
+                    bool isPlaying = transportSource.isPlaying();
+                    juce::Colour playheadColour = isPlaying ? Palette::playhead : Palette::playheadDim;
+                    int lineWidth = isPlaying ? Spacing::playheadWidth : 1;
+
+                    // Vertical line
+                    g.setColour (playheadColour);
+                    g.fillRect (x - lineWidth / 2, cellBounds.getY(), lineWidth, cellBounds.getHeight());
+
+                    // Triangle cap at top (playing only)
+                    if (isPlaying)
+                    {
+                        juce::Path cap;
+                        float cx = (float)x;
+                        float topY = (float)cellBounds.getY();
+                        float halfBase = Spacing::playheadCap / 2.0f;
+                        cap.addTriangle (cx - halfBase, topY,
+                                         cx + halfBase, topY,
+                                         cx,            topY + (float)Spacing::playheadCap);
+                        g.fillPath (cap);
+                    }
+                    break;
                 }
             }
         }
@@ -309,6 +523,36 @@ void BarGridComponent::mouseDoubleClick (const juce::MouseEvent&)
 }
 
 //==============================================================================
+// Mouse wheel — Ctrl+scroll for zoom
+
+void BarGridComponent::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel)
+{
+    try
+    {
+        if (e.mods.isCtrlDown())
+        {
+            // Determine zoom direction: negative deltaY = zoom in (towards user),
+            // positive deltaY = zoom out.
+            int delta = (wheel.deltaY < 0) ? 1 : -1;
+            if (wheel.isReversed)
+                delta = -delta;
+
+            int anchorBar = model.barIndexAtClamped (e.getPosition(), contentWidth);
+
+            if (onZoomRequest)
+                onZoomRequest (delta, anchorBar);
+
+            return; // Consumed
+        }
+
+        // Not Ctrl: let the parent Viewport handle scrolling
+        Component::mouseWheelMove (e, wheel);
+    }
+    catch (const std::exception& e) { juce::Logger::writeToLog ("BarGridComponent::mouseWheelMove: " + juce::String (e.what())); }
+    catch (...) { juce::Logger::writeToLog ("BarGridComponent::mouseWheelMove: unknown exception"); }
+}
+
+//==============================================================================
 // Keyboard handlers
 
 bool BarGridComponent::keyPressed (const juce::KeyPress& key)
@@ -358,6 +602,47 @@ bool BarGridComponent::keyPressed (const juce::KeyPress& key)
                     transportSource.start();
                 }
             }
+            handled = true;
+        }
+        else if (key.isKeyCode ('=') && key.getModifiers().isCtrlDown())
+        {
+            // Ctrl+= zoom in, anchored at playhead or selection
+            int anchorBar = (playingBar.has_value() ? playingBar.value()
+                            : (model.selection.has_value() ? model.selection->getStart() : 0));
+            if (onZoomRequest)
+                onZoomRequest (1, anchorBar);
+            handled = true;
+        }
+        else if (key.isKeyCode ('-') && key.getModifiers().isCtrlDown())
+        {
+            // Ctrl+- zoom out, anchored at playhead or selection
+            int anchorBar = (playingBar.has_value() ? playingBar.value()
+                            : (model.selection.has_value() ? model.selection->getStart() : 0));
+            if (onZoomRequest)
+                onZoomRequest (-1, anchorBar);
+            handled = true;
+        }
+        else if (key.isKeyCode ('0') && key.getModifiers().isCtrlDown())
+        {
+            // Ctrl+0 jump to Song overview (level 0)
+            int anchorBar = (playingBar.has_value() ? playingBar.value()
+                            : (model.selection.has_value() ? model.selection->getStart() : 0));
+            // We request a delta that goes to level 0. Since we don't know current level,
+            // we use a special approach: fire zoom out many times OR just set directly.
+            // Instead, let the ArrangementView handle this via a special call.
+            // For now, use delta = -100 as a "reset to 0" signal.
+            if (onZoomRequest)
+                onZoomRequest (-100, anchorBar);
+            handled = true;
+        }
+        else if (key.isKeyCode (juce::KeyPress::pageDownKey))
+        {
+            model.moveBy (model.barsPerRow, key.getModifiers().isShiftDown());
+            handled = true;
+        }
+        else if (key.isKeyCode (juce::KeyPress::pageUpKey))
+        {
+            model.moveBy (-model.barsPerRow, key.getModifiers().isShiftDown());
             handled = true;
         }
 

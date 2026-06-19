@@ -2,7 +2,7 @@
 
 #include <juce_audio_utils/juce_audio_utils.h>
 #include "DemoUtilities.h"
-#include "TimelineComponent.h"
+#include "ArrangementView.h"
 #include "LogConsole.h"
 #include "Theme.h"
 
@@ -30,9 +30,8 @@ private:
     juce::TextButton openFileButton { "Open JSON File..." };
     juce::TextButton logToggleButton { "Log" };
 
-    std::unique_ptr<TimelineComponent> timeline;
-    juce::Label zoomLabel                     { {}, "Zoom:" };
-    juce::Slider zoomSlider                   { juce::Slider::LinearHorizontal, juce::Slider::NoTextBox };
+    std::unique_ptr<ArrangementView> arrangement;
+    juce::ApplicationProperties appProperties;
     juce::ToggleButton followTransportButton  { "Follow Transport" };
     juce::TextButton startStopButton          { "Play/Stop" };
 

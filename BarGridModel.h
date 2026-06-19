@@ -12,6 +12,13 @@
 // Data structures for the bar grid model
 
 enum class LabelDetail { NumberAndLabel, NumberOnly, SparseNumber };
+enum class GridMode { WholeSong, Section, Fixed };
+
+struct RowSpan
+{
+    int firstBar = 0;
+    int barCount = 1;
+};
 
 struct Bar
 {
@@ -32,14 +39,16 @@ class BarGridModel
 public:
     std::vector<Bar> bars;
     int barsPerRow = 8;
+    GridMode mode = GridMode::Fixed;
+    int zoomLevel = 1;
+    std::vector<RowSpan> rowSpans;
 
     //==========================================================================
-    // Rebuild: construct the bar list from analysis data
+    // Rebuild: construct the bar list from analysis data (no barsPerRow — set via applyZoom)
 
-    void rebuild (const SongAnalysis& analysis, int newBarsPerRow, double totalLengthSeconds)
+    void rebuild (const SongAnalysis& analysis, double totalLengthSeconds)
     {
         bars.clear();
-        barsPerRow = juce::jmax (1, newBarsPerRow);
 
         // Determine bar boundaries
         std::vector<double> barStarts;
@@ -103,8 +112,11 @@ public:
             bars.push_back (bar);
         }
 
-        // Clear selection when rebuilding
+        // Clear selection and rowSpans when rebuilding
         clearSelection();
+        rowSpans.clear();
+        mode = GridMode::Fixed;
+        barsPerRow = juce::jmax (1, bars.size() < 8 ? (int)bars.size() : 8);
     }
 
     //==========================================================================
@@ -119,6 +131,10 @@ public:
     {
         if (bars.empty())
             return 1;
+
+        if (mode == GridMode::Section && !rowSpans.empty())
+            return (int)rowSpans.size();
+
         return (int)std::ceil (bars.size() / (double)barsPerRow);
     }
 
@@ -127,11 +143,36 @@ public:
         return rowCount() * Spacing::rowHeight;
     }
 
+    int cellWidthForRow (int rowIndex, int viewportWidth) const
+    {
+        if (mode == GridMode::Section && rowIndex >= 0 && rowIndex < (int)rowSpans.size())
+            return juce::jmax (1, viewportWidth / juce::jmax (1, rowSpans[rowIndex].barCount));
+
+        return cellWidth (viewportWidth);
+    }
+
     juce::Rectangle<int> cellBounds (int barIndexZeroBased, int viewportWidth) const
     {
         if (barIndexZeroBased < 0 || barIndexZeroBased >= (int)bars.size())
             return juce::Rectangle<int>();
 
+        if (mode == GridMode::Section && !rowSpans.empty())
+        {
+            // Find which row this bar belongs to
+            for (size_t r = 0; r < rowSpans.size(); ++r)
+            {
+                const auto& span = rowSpans[r];
+                if (barIndexZeroBased >= span.firstBar && barIndexZeroBased < span.firstBar + span.barCount)
+                {
+                    int col = barIndexZeroBased - span.firstBar;
+                    int cw = juce::jmax (1, viewportWidth / juce::jmax (1, span.barCount));
+                    return juce::Rectangle<int> (col * cw, (int)r * Spacing::rowHeight, cw, Spacing::rowHeight);
+                }
+            }
+            return juce::Rectangle<int>();
+        }
+
+        // Fixed or WholeSong: uniform grid
         int cw = cellWidth (viewportWidth);
         int col = barIndexZeroBased % barsPerRow;
         int row = barIndexZeroBased / barsPerRow;
@@ -147,12 +188,32 @@ public:
         if (bars.empty())
             return std::nullopt;
 
+        int row = p.y / Spacing::rowHeight;
+
+        if (mode == GridMode::Section && !rowSpans.empty())
+        {
+            if (row < 0 || row >= (int)rowSpans.size())
+                return std::nullopt;
+
+            const auto& span = rowSpans[row];
+            int cw = juce::jmax (1, viewportWidth / juce::jmax (1, span.barCount));
+            int col = p.x / cw;
+
+            if (col < 0 || col >= span.barCount)
+                return std::nullopt;
+
+            int barIndex = span.firstBar + col;
+            if (barIndex >= (int)bars.size())
+                return std::nullopt;
+
+            return barIndex;
+        }
+
         int cw = cellWidth (viewportWidth);
         if (cw <= 0)
             return std::nullopt;
 
         int col = p.x / cw;
-        int row = p.y / Spacing::rowHeight;
 
         if (col < 0 || col >= barsPerRow || row < 0)
             return std::nullopt;
@@ -173,10 +234,24 @@ public:
         if (exact.has_value())
             return exact.value();
 
-        // Clamp to nearest valid bar
+        int row = juce::jlimit (0, rowCount() - 1, p.y / Spacing::rowHeight);
+
+        if (mode == GridMode::Section && !rowSpans.empty())
+        {
+            if (row >= (int)rowSpans.size())
+                row = (int)rowSpans.size() - 1;
+
+            const auto& span = rowSpans[row];
+            int cw = juce::jmax (1, viewportWidth / juce::jmax (1, span.barCount));
+            int col = juce::jlimit (0, span.barCount - 1, p.x / cw);
+
+            int barIndex = span.firstBar + col;
+            return juce::jlimit (0, (int)bars.size() - 1, barIndex);
+        }
+
+        // Clamp to nearest valid bar (Fixed/WholeSong)
         int cw = cellWidth (viewportWidth);
         int col = juce::jlimit (0, barsPerRow - 1, p.x / juce::jmax (1, cw));
-        int row = juce::jlimit (0, rowCount() - 1, p.y / Spacing::rowHeight);
 
         int barIndex = row * barsPerRow + col;
         return juce::jlimit (0, (int)bars.size() - 1, barIndex);
@@ -192,6 +267,162 @@ public:
         if (cellWidthPx >= 36)
             return LabelDetail::NumberOnly;
         return LabelDetail::SparseNumber;
+    }
+
+    //==========================================================================
+    // Zoom / mode helpers
+
+    /** Median section length in bars, used to derive zoom step sizes. */
+    int medianSectionBars (const SongAnalysis& analysis) const
+    {
+        if (analysis.segments.empty() || analysis.downbeats.empty())
+            return 8;
+
+        std::vector<int> sectionBars;
+        for (const auto& seg : analysis.segments)
+        {
+            int count = 0;
+            for (double db : analysis.downbeats)
+            {
+                if (db >= seg.start && db < seg.end)
+                    ++count;
+            }
+            if (count > 0)
+                sectionBars.push_back (count);
+        }
+
+        if (sectionBars.empty())
+            return 8;
+
+        std::sort (sectionBars.begin(), sectionBars.end());
+        return sectionBars[sectionBars.size() / 2];
+    }
+
+    /** Maximum zoom level, where one bar fills one row. */
+    int maxZoomLevel (const SongAnalysis& analysis) const
+    {
+        if (bars.empty())
+            return 0;
+        int S = medianSectionBars (analysis);
+        if (S <= 1)
+            return 2; // Song + Section + Bar
+        return 1 + (int)std::ceil (std::log2 ((double)S));
+    }
+
+    /** Human-readable name for a zoom level (used in the toolbar chip). */
+    static juce::String zoomLevelName (int level, int maxLevel)
+    {
+        if (level == 0) return "Song";
+        if (level == 1) return "Section";
+        if (level >= maxLevel) return "Bar";
+
+        // Intermediate levels: 1/2, 1/4, 1/8, ... Section
+        int denom = 1 << (level - 1);
+        return "1/" + juce::String (denom) + " Section";
+    }
+
+    /** Apply a zoom level, setting mode, barsPerRow, and rowSpans accordingly. */
+    void applyZoom (const SongAnalysis& analysis, int level, double /*totalLen*/)
+    {
+        zoomLevel = juce::jmax (0, level);
+        int maxLvl = maxZoomLevel (analysis);
+        zoomLevel = juce::jmin (maxLvl, zoomLevel);
+        rowSpans.clear();
+
+        if (bars.empty())
+        {
+            mode = GridMode::Fixed;
+            barsPerRow = 8;
+            return;
+        }
+
+        if (zoomLevel == 0)
+        {
+            // WholeSong: one row, all bars
+            mode = GridMode::WholeSong;
+            barsPerRow = (int)bars.size();
+        }
+        else if (zoomLevel == 1)
+        {
+            // Section-aligned ragged rows
+            mode = GridMode::Section;
+            barsPerRow = 0; // not used in Section mode
+            buildRowSpans (analysis);
+        }
+        else
+        {
+            // Fixed bars-per-row: ceil(S / 2^(level-1))
+            mode = GridMode::Fixed;
+            int S = medianSectionBars (analysis);
+            if (S <= 0) S = 8;
+            int exponent = zoomLevel - 1;
+            barsPerRow = juce::jmax (1, (int)std::ceil (S / std::pow (2.0, exponent)));
+        }
+    }
+
+    /** Build rowSpans from analysis segments for Section mode. */
+    void buildRowSpans (const SongAnalysis& analysis)
+    {
+        rowSpans.clear();
+
+        if (bars.empty())
+        {
+            rowSpans.push_back ({ 0, 1 });
+            return;
+        }
+
+        if (!analysis.segments.empty())
+        {
+            for (const auto& seg : analysis.segments)
+            {
+                int firstBar = -1;
+                int lastBar  = -1;
+
+                for (size_t i = 0; i < bars.size(); ++i)
+                {
+                    // Bar overlaps the segment if its start is within range
+                    if (bars[i].startTime >= seg.start
+                        && (i == 0 || bars[i - 1].startTime < seg.end)
+                        && bars[i].startTime < seg.end)
+                    {
+                        if (firstBar == -1)
+                            firstBar = (int)i;
+                        lastBar = (int)i;
+                    }
+                }
+
+                if (firstBar >= 0 && lastBar >= firstBar)
+                    rowSpans.push_back ({ firstBar, lastBar - firstBar + 1 });
+            }
+        }
+
+        // Fallback: divide bars evenly (8 per row)
+        if (rowSpans.empty())
+        {
+            const int perRow = 8;
+            for (int i = 0; i < (int)bars.size(); i += perRow)
+                rowSpans.push_back ({ i, juce::jmin (perRow, (int)bars.size() - i) });
+        }
+    }
+
+    /** Row index for a given bar index (0-based). */
+    int rowOfBar (int barIndexZeroBased) const
+    {
+        if (barIndexZeroBased < 0 || barIndexZeroBased >= (int)bars.size())
+            return 0;
+
+        if (mode == GridMode::Section && !rowSpans.empty())
+        {
+            for (size_t i = 0; i < rowSpans.size(); ++i)
+            {
+                if (barIndexZeroBased >= rowSpans[i].firstBar
+                    && barIndexZeroBased < rowSpans[i].firstBar + rowSpans[i].barCount)
+                    return (int)i;
+            }
+            return 0;
+        }
+
+        return barIndexZeroBased / juce::jmax (1, barsPerRow);
     }
 
     //==========================================================================
@@ -303,6 +534,9 @@ public:
             testBarIndexAtClamped();
             testLabelDetail();
             testSelection();
+            testApplyZoom();
+            testMedianSectionBars();
+            testZoomLevelNames();
         }
 
     private:
@@ -316,7 +550,8 @@ public:
             analysis.segments.push_back ({ 0.0, 2.0, "verse" });
 
             BarGridModel model;
-            model.rebuild (analysis, 8, 2.0);
+            model.rebuild (analysis, 2.0);
+            model.barsPerRow = 8; // set display param directly for tests
 
             expect (model.bars.size() == 4, "Should have 4 bars from 4 downbeats");
             expect (model.bars[0].startTime == 0.0, "Bar 0 starts at 0");
@@ -336,7 +571,8 @@ public:
             // No downbeats - will synthesize
 
             BarGridModel model;
-            model.rebuild (analysis, 8, 2.0); // 2 seconds = 2 bars at 120 BPM
+            model.rebuild (analysis, 2.0); // 2 seconds = 2 bars at 120 BPM
+            model.barsPerRow = 8;
 
             expect (!model.bars.empty(), "Fallback should synthesize bars");
             expect (model.bars.size() >= 2, "Should have at least 2 bars");
@@ -350,7 +586,7 @@ public:
             analysis.bpm = 0.0; // No BPM - placeholder
 
             BarGridModel model;
-            model.rebuild (analysis, 8, 10.0);
+            model.rebuild (analysis, 10.0);
 
             expect (model.bars.empty(), "Should have no bars with no BPM and no downbeats");
         }
@@ -444,6 +680,88 @@ public:
             expect (model.labelDetailFor (100) == LabelDetail::NumberAndLabel, "Wide cells show label");
             expect (model.labelDetailFor (50) == LabelDetail::NumberOnly, "Medium cells show number only");
             expect (model.labelDetailFor (20) == LabelDetail::SparseNumber, "Narrow cells show sparse numbers");
+        }
+
+        void testApplyZoom()
+        {
+            beginTest ("applyZoom");
+
+            SongAnalysis analysis;
+            analysis.bpm = 120.0;
+            analysis.downbeats = { 0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5,
+                                   4.0, 4.5, 5.0, 5.5, 6.0, 6.5, 7.0, 7.5 };
+            analysis.segments.push_back ({ 0.0, 4.0, "verse" });  // 8 bars
+            analysis.segments.push_back ({ 4.0, 8.0, "chorus" }); // 8 bars
+
+            BarGridModel model;
+            model.rebuild (analysis, 8.0);
+            expect (model.bars.size() == 16, "16 bars from 16 downbeats");
+
+            // Level 0: WholeSong
+            model.applyZoom (analysis, 0, 8.0);
+            expect (model.mode == GridMode::WholeSong, "Level 0 = WholeSong");
+            expect (model.barsPerRow == 16, "16 bars per row for 16-bar song");
+
+            // Level 1: Section
+            model.applyZoom (analysis, 1, 8.0);
+            expect (model.mode == GridMode::Section, "Level 1 = Section");
+            expect (model.rowSpans.size() == 2, "2 rows for 2 segments");
+            if (model.rowSpans.size() >= 2)
+            {
+                expect (model.rowSpans[0].barCount == 8, "First section 8 bars");
+                expect (model.rowSpans[1].barCount == 8, "Second section 8 bars");
+            }
+
+            // Level 2: Fixed, ceil(S/2) = 4 bars/row
+            model.applyZoom (analysis, 2, 8.0);
+            expect (model.mode == GridMode::Fixed, "Level 2 = Fixed");
+            expect (model.barsPerRow == 4, "4 bars per row for S=8 at level 2");
+
+            // Level N (max): Bar mode
+            int maxLvl = model.maxZoomLevel (analysis);
+            model.applyZoom (analysis, maxLvl, 8.0);
+            expect (model.mode == GridMode::Fixed, "Max level = Fixed");
+            expect (model.barsPerRow == 1, "Max level bar-per-row = 1");
+        }
+
+        void testMedianSectionBars()
+        {
+            beginTest ("medianSectionBars");
+
+            SongAnalysis analysis;
+            analysis.bpm = 120.0;
+            // 16 quarter-note downbeats = 16 bars
+            for (int i = 0; i < 16; ++i)
+                analysis.downbeats.push_back (i * 0.5);
+
+            // Two sections: 8 bars and 8 bars → median = 8
+            analysis.segments.push_back ({ 0.0, 4.0, "verse" });
+            analysis.segments.push_back ({ 4.0, 8.0, "chorus" });
+
+            BarGridModel model;
+            model.rebuild (analysis, 8.0);
+
+            int median = model.medianSectionBars (analysis);
+            expect (median == 8, "Median section bars = 8 for two 8-bar sections");
+
+            // Empty segments → default 8
+            SongAnalysis emptyAnalysis;
+            emptyAnalysis.bpm = 120.0;
+            int defaultMedian = model.medianSectionBars (emptyAnalysis);
+            expect (defaultMedian == 8, "Default median = 8 with no segments");
+        }
+
+        void testZoomLevelNames()
+        {
+            beginTest ("zoomLevelNames");
+
+            expect (BarGridModel::zoomLevelName (0, 4) == "Song");
+            expect (BarGridModel::zoomLevelName (1, 4) == "Section");
+            expect (BarGridModel::zoomLevelName (4, 4) == "Bar");
+
+            // Level 2 for S=8 → 1/2 Section
+            auto name2 = BarGridModel::zoomLevelName (2, 4);
+            expect (name2.contains ("Section"), "Level 2 name contains 'Section'");
         }
 
         void testSelection()

@@ -13,7 +13,15 @@ public:
     void layoutForWidth (int viewportWidth);
     void refresh();
     std::optional<int> getHoveredBar() const noexcept { return hoveredBar; }
+    void setPlayingBar (std::optional<int> barIndex);
+    std::optional<int> getPlayingBar() const noexcept { return playingBar; }
+    void setPlayheadPosition (std::optional<double> timeSeconds);
+    std::optional<double> getPlayheadPosition() const noexcept { return playheadTime; }
+    juce::Rectangle<int> playheadCellRect (int viewportWidth) const;
     BarGridModel& getModel() noexcept { return model; }
+
+    // Zoom request: delta (+1 = zoom in, -1 = zoom out), anchorBar = bar to anchor
+    std::function<void(int delta, int anchorBar)> onZoomRequest;
 
     void paint (juce::Graphics&) override;
     void mouseMove (const juce::MouseEvent&) override;
@@ -23,6 +31,7 @@ public:
     void mouseDrag (const juce::MouseEvent&) override;
     void mouseUp (const juce::MouseEvent&) override;
     void mouseDoubleClick (const juce::MouseEvent&) override;
+    void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
     bool keyPressed (const juce::KeyPress&) override;
 
 private:
@@ -30,6 +39,8 @@ private:
     juce::AudioTransportSource& transportSource;
     int contentWidth = 0;
     std::optional<int> hoveredBar;
+    std::optional<int> playingBar;
+    std::optional<double> playheadTime;
 
     void updateAccessibilityDescription();
     void scrollSelectedIntoView();

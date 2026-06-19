@@ -2,13 +2,6 @@
 
 MainComponent::MainComponent()
 {
-    addAndMakeVisible (zoomLabel);
-    zoomLabel.setFont (juce::FontOptions (15.00f, juce::Font::plain));
-    zoomLabel.setJustificationType (juce::Justification::centredRight);
-    zoomLabel.setEditable (false, false, false);
-    zoomLabel.setColour (juce::TextEditor::textColourId, juce::Colours::black);
-    zoomLabel.setColour (juce::TextEditor::backgroundColourId, juce::Colour (0x00000000));
-
     addAndMakeVisible (followTransportButton);
     followTransportButton.onClick = [this] {
         try { updateFollowTransportState(); }
@@ -23,22 +16,25 @@ MainComponent::MainComponent()
         catch (...) { juce::Logger::writeToLog ("openFileButton.onClick: unknown exception"); }
     };
 
-    addAndMakeVisible (zoomSlider);
-    zoomSlider.setRange (0, 1, 0);
-    zoomSlider.onValueChange = [this] {
-        try
-        {
-            if (timeline)
-                timeline->setZoomFactor (zoomSlider.getValue());
-        }
-        catch (const std::exception& e) { juce::Logger::writeToLog ("zoomSlider.onValueChange: " + juce::String (e.what())); }
-        catch (...) { juce::Logger::writeToLog ("zoomSlider.onValueChange: unknown exception"); }
-    };
-    zoomSlider.setSkewFactor (2);
+    // Persistence setup
+    {
+        juce::PropertiesFile::Options options;
+        options.applicationName = "juce-arranger";
+        options.filenameSuffix = ".settings";
+        options.folderName = "juce-arranger";
+        options.osxLibrarySubFolder = "Application Support";
+        appProperties.setStorageParameters (options);
+    }
 
-    timeline = std::make_unique<TimelineComponent> (formatManager, transportSource, zoomSlider);
-    addAndMakeVisible (timeline.get());
-    timeline->addChangeListener (this);
+    arrangement = std::make_unique<ArrangementView> (formatManager, transportSource, thread);
+    addAndMakeVisible (arrangement.get());
+    arrangement->addChangeListener (this);
+
+    // Restore persisted zoom level (default 1 = Section)
+    {
+        int n = appProperties.getUserSettings()->getIntValue ("zoomLevel", 1);
+        arrangement->setZoomLevel (n);
+    }
 
     addAndMakeVisible (startStopButton);
     startStopButton.setColour (juce::TextButton::buttonColourId, juce::Colour (0xff79ed7f));
@@ -99,8 +95,8 @@ MainComponent::~MainComponent()
     audioSourcePlayer.setSource (nullptr);
     audioDeviceManager.removeAudioCallback (&audioSourcePlayer);
 
-    if (timeline)
-        timeline->removeChangeListener (this);
+    if (arrangement)
+        arrangement->removeChangeListener (this);
 }
 
 void MainComponent::paint (juce::Graphics& g)
@@ -127,16 +123,13 @@ void MainComponent::resized()
 
         r.removeFromBottom (6);
 
-        if (timeline)
-            timeline->setBounds (r.removeFromBottom (140));
+        // ArrangementView fills the remaining space
+        if (arrangement)
+            arrangement->setBounds (r);
 
         auto controlRightBounds = controls.removeFromRight (controls.getWidth() / 3);
         openFileButton.setBounds (controlRightBounds.removeFromTop (30).reduced (10));
         statusLabel.setBounds (controlRightBounds);
-
-        auto zoom = controls.removeFromTop (25);
-        zoomLabel .setBounds (zoom.removeFromLeft (50));
-        zoomSlider.setBounds (zoom);
 
         followTransportButton.setBounds (controls.removeFromTop (25));
         startStopButton.setBounds (controls.removeFromTop (25));
@@ -258,13 +251,12 @@ void MainComponent::showAudioResource (juce::URL resource)
     }
 
     currentAudioFile = std::move (audioURL);
-    zoomSlider.setValue (0, juce::dontSendNotification);
 
-    if (timeline)
-        timeline->setURL (currentAudioFile);
+    if (arrangement)
+        arrangement->setURL (currentAudioFile);
 
-    if (timeline)
-        timeline->setAnalysis (currentAnalysis);
+    if (arrangement)
+        arrangement->setAnalysis (currentAnalysis);
 }
 
 bool MainComponent::loadURLIntoTransport (const juce::URL& audioURL)
@@ -313,8 +305,10 @@ void MainComponent::startOrStop()
 
 void MainComponent::updateFollowTransportState()
 {
-    if (timeline)
-        timeline->setFollowsTransport (followTransportButton.getToggleState());
+    bool shouldFollow = followTransportButton.getToggleState();
+
+    if (arrangement)
+        arrangement->setFollowsTransport (shouldFollow);
 }
 
 void MainComponent::openAudioFile()
@@ -353,8 +347,15 @@ void MainComponent::changeListenerCallback (juce::ChangeBroadcaster* source)
 {
     try
     {
-        if (source == timeline.get())
-            showAudioResource (juce::URL (timeline->getLastDroppedFile()));
+        if (source == arrangement.get())
+        {
+            // Persist zoom level when toolbar selection changes
+            if (arrangement)
+                appProperties.getUserSettings()->setValue ("zoomLevel", arrangement->getZoomLevel());
+
+            // Force an immediate status update so selection info appears
+            updateStatus();
+        }
     }
     catch (const std::exception& e) { juce::Logger::writeToLog ("MainComponent::changeListenerCallback: " + juce::String (e.what())); }
     catch (...) { juce::Logger::writeToLog ("MainComponent::changeListenerCallback: unknown exception"); }
