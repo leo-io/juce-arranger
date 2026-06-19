@@ -41,7 +41,15 @@ public:
     {
         auto r = getLocalBounds();
         clearButton.setBounds (r.removeFromTop (20).removeFromRight (60).reduced (2));
-        console.setBounds (r);
+
+        if (collapsed)
+        {
+            console.setBounds (r.withHeight (0)); // Hide console when collapsed
+        }
+        else
+        {
+            console.setBounds (r);
+        }
     }
 
     void paint (juce::Graphics& g) override
@@ -54,6 +62,24 @@ public:
     void clear()
     {
         console.clear();
+    }
+
+    void setCollapsed (bool shouldCollapse)
+    {
+        collapsed = shouldCollapse;
+        console.setVisible (!collapsed);
+        resized();
+        repaint();
+    }
+
+    bool isCollapsed() const noexcept
+    {
+        return collapsed;
+    }
+
+    int getPreferredHeight() const noexcept
+    {
+        return collapsed ? 22 : 170;
     }
 
 private:
@@ -89,6 +115,7 @@ private:
     juce::CriticalSection mutex;
     std::deque<juce::String> pending;
     int maxLines = 200;
+    bool collapsed = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (LogConsole)
 };

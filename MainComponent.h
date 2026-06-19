@@ -4,6 +4,7 @@
 #include "DemoUtilities.h"
 #include "TimelineComponent.h"
 #include "LogConsole.h"
+#include "Theme.h"
 
 class MainComponent : public juce::Component,
                       private juce::ChangeListener
@@ -27,6 +28,7 @@ private:
 
     std::unique_ptr<juce::FileChooser> fileChooser;
     juce::TextButton openFileButton { "Open JSON File..." };
+    juce::TextButton logToggleButton { "Log" };
 
     std::unique_ptr<TimelineComponent> timeline;
     juce::Label zoomLabel                     { {}, "Zoom:" };
