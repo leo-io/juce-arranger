@@ -66,6 +66,20 @@ MainComponent::MainComponent()
     logConsole = std::make_unique<LogConsole>();
     addAndMakeVisible (logConsole.get());
 
+    addAndMakeVisible (logToggleButton);
+    logToggleButton.onClick = [this] {
+        try
+        {
+            if (logConsole)
+            {
+                logConsole->setCollapsed (! logConsole->isCollapsed());
+                resized();
+            }
+        }
+        catch (const std::exception& e) { juce::Logger::writeToLog ("logToggleButton.onClick: " + juce::String (e.what())); }
+        catch (...) { juce::Logger::writeToLog ("logToggleButton.onClick: unknown exception"); }
+    };
+
     setOpaque (true);
     setSize (1100, 650);
 
@@ -93,7 +107,7 @@ void MainComponent::paint (juce::Graphics& g)
 {
     try
     {
-        g.fillAll (getUIColourIfAvailable (juce::LookAndFeel_V4::ColourScheme::UIColour::windowBackground));
+        g.fillAll (Palette::surface);
     }
     catch (const std::exception& e) { juce::Logger::writeToLog ("MainComponent::paint: " + juce::String (e.what())); }
     catch (...) { juce::Logger::writeToLog ("MainComponent::paint: unknown exception"); }
@@ -105,7 +119,7 @@ void MainComponent::resized()
     {
         auto r = getLocalBounds().reduced (4);
 
-        auto logArea = r.removeFromBottom (170);
+        auto logArea = r.removeFromBottom (logConsole ? logConsole->getPreferredHeight() : 170);
         if (logConsole)
             logConsole->setBounds (logArea);
 
@@ -125,7 +139,8 @@ void MainComponent::resized()
         zoomSlider.setBounds (zoom);
 
         followTransportButton.setBounds (controls.removeFromTop (25));
-        startStopButton.setBounds (controls);
+        startStopButton.setBounds (controls.removeFromTop (25));
+        logToggleButton.setBounds (controls);
     }
     catch (const std::exception& e) { juce::Logger::writeToLog ("MainComponent::resized: " + juce::String (e.what())); }
     catch (...) { juce::Logger::writeToLog ("MainComponent::resized: unknown exception"); }
