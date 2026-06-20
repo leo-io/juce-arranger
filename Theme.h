@@ -29,4 +29,5 @@ namespace Spacing
     constexpr int playheadCap    = 7;    // triangle cap base width
     constexpr int minCellPx      = 6;    // cell width floor before density downgrade
     constexpr int segmentDivider = 2;    // bold divider weight at segment boundaries
+    constexpr float segmentLabelFont = 18.0f; // prominent segment name in all zoom modes
 }

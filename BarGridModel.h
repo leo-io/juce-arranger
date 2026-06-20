@@ -5,6 +5,7 @@
 #include <vector>
 #include <optional>
 #include <cmath>
+#include <set>
 #include "Arrangement.h"
 #include "Theme.h"
 
@@ -28,6 +29,7 @@ struct Bar
     juce::String segmentLabel;   // from arrangement.segmentAt(startTime)
     juce::Colour colour;         // from arrangement.colourForLabel(segmentLabel)
     bool         isSegmentStart; // true iff label differs from previous bar's
+    int          segmentIndex;   // 0-based index into Arrangement::segments (-1 if none)
 };
 
 //==============================================================================
@@ -98,11 +100,25 @@ public:
                 bar.endTime = totalLengthSeconds; // Last bar extends to end
 
             // Get segment info at the start of this bar
+            bar.segmentIndex = -1;
             const Segment* seg = arrangement.segmentAt (bar.startTime);
             if (seg != nullptr)
+            {
                 bar.segmentLabel = seg->label;
+                // Resolve segment index
+                for (int si = 0; si < (int)arrangement.segments.size(); ++si)
+                {
+                    if (&arrangement.segments[si] == seg)
+                    {
+                        bar.segmentIndex = si;
+                        break;
+                    }
+                }
+            }
             else
+            {
                 bar.segmentLabel = juce::String();
+            }
 
             bar.colour = arrangement.colourForLabel (bar.segmentLabel);
 
@@ -117,6 +133,25 @@ public:
         rowSpans.clear();
         mode = GridMode::Fixed;
         barsPerRow = juce::jmax (1, bars.size() < 8 ? (int)bars.size() : 8);
+    }
+
+    //==========================================================================
+    // refreshLabels: update only segmentLabel/colour/isSegmentStart from the
+    // arrangement, preserving geometry, rowSpans, mode, zoom and selection.
+    // Safe to call after a label-only edit (no structural change).
+
+    void refreshLabels (const Arrangement& arrangement)
+    {
+        for (size_t i = 0; i < bars.size(); ++i)
+        {
+            auto& bar = bars[i];
+
+            if (bar.segmentIndex >= 0 && bar.segmentIndex < (int) arrangement.segments.size())
+                bar.segmentLabel = arrangement.segments[bar.segmentIndex].label;
+
+            bar.colour = arrangement.colourForLabel (bar.segmentLabel);
+            bar.isSegmentStart = (i == 0) || (bar.segmentLabel != bars[i - 1].segmentLabel);
+        }
     }
 
     //==========================================================================
@@ -490,7 +525,12 @@ public:
     //==========================================================================
     // Selection API
 
+    // The "active" contiguous range (drives anchor, keyboard extend, transport seek).
     std::optional<juce::Range<int>> selection;
+
+    // Additional disjoint ranges accumulated via Ctrl/Cmd+click multi-select.
+    // These never overlap each other or the active selection.
+    std::vector<juce::Range<int>> extraSelections;
 
     void setAnchor (int barIndex)
     {
@@ -551,14 +591,122 @@ public:
     void clearSelection()
     {
         selection.reset();
+        extraSelections.clear();
+    }
+
+    /** Clear only the additional multi-select ranges, keeping the active range. */
+    void clearExtraSelections()
+    {
+        extraSelections.clear();
     }
 
     bool isSelected (int barIndex) const
     {
-        if (!selection.has_value())
-            return false;
-        auto sel = selection.value();
-        return barIndex >= sel.getStart() && barIndex < sel.getEnd();
+        if (selection.has_value())
+        {
+            auto sel = selection.value();
+            if (barIndex >= sel.getStart() && barIndex < sel.getEnd())
+                return true;
+        }
+
+        for (const auto& r : extraSelections)
+            if (barIndex >= r.getStart() && barIndex < r.getEnd())
+                return true;
+
+        return false;
+    }
+
+    //==========================================================================
+    // Multi-selection (Ctrl/Cmd+click) support
+
+    /** Flatten the active + extra ranges into a sorted set of bar indices. */
+    std::set<int> selectedIndexSet() const
+    {
+        std::set<int> s;
+        auto add = [&] (juce::Range<int> r)
+        {
+            for (int i = r.getStart(); i < r.getEnd(); ++i)
+                if (i >= 0 && i < (int) bars.size())
+                    s.insert (i);
+        };
+
+        if (selection.has_value())
+            add (selection.value());
+        for (const auto& r : extraSelections)
+            add (r);
+
+        return s;
+    }
+
+    /** Total number of selected bars across all ranges. */
+    int selectedBarCount() const
+    {
+        return (int) selectedIndexSet().size();
+    }
+
+    /** Rebuild active + extra ranges from a flat index set, making the range that
+        contains activeBar the active selection when possible. */
+    void setFromIndexSet (const std::set<int>& indices, int activeBar)
+    {
+        selection.reset();
+        extraSelections.clear();
+
+        if (indices.empty())
+            return;
+
+        // Merge contiguous indices into ranges.
+        std::vector<juce::Range<int>> ranges;
+        int start = -1, prev = -2;
+        for (int i : indices)
+        {
+            if (i != prev + 1)
+            {
+                if (start >= 0)
+                    ranges.push_back (juce::Range<int> (start, prev + 1));
+                start = i;
+            }
+            prev = i;
+        }
+        ranges.push_back (juce::Range<int> (start, prev + 1));
+
+        // Pick the range containing activeBar as the active selection.
+        bool foundActive = false;
+        for (const auto& r : ranges)
+        {
+            if (! foundActive && activeBar >= r.getStart() && activeBar < r.getEnd())
+            {
+                selection = r;
+                foundActive = true;
+            }
+            else
+            {
+                extraSelections.push_back (r);
+            }
+        }
+
+        if (! foundActive)
+        {
+            // activeBar was removed: promote the first range to active.
+            selection = ranges.front();
+            extraSelections.assign (ranges.begin() + 1, ranges.end());
+        }
+    }
+
+    /** Ctrl/Cmd+click: toggle a single bar in/out of the multi-selection. */
+    void toggleAt (int barIndex)
+    {
+        if (bars.empty())
+            return;
+
+        barIndex = juce::jlimit (0, (int) bars.size() - 1, barIndex);
+
+        auto indices = selectedIndexSet();
+        if (indices.count (barIndex))
+            indices.erase (barIndex);
+        else
+            indices.insert (barIndex);
+
+        setFromIndexSet (indices, barIndex);
     }
 
     juce::Range<double> selectionTimeRange() const
@@ -872,6 +1020,32 @@ public:
             auto timeRange = model.selectionTimeRange();
             expect (timeRange.getStart() == 2.0 && timeRange.getEnd() == 6.0,
                     "selectionTimeRange covers selected bars");
+
+            // Multi-selection (Ctrl/Cmd+click toggle)
+            model.clearSelection();
+            model.setAnchor (1);
+            model.toggleAt (5);
+            expect (model.isSelected (1) && model.isSelected (5), "toggleAt adds disjoint bar");
+            expect (!model.isSelected (3), "Gap between disjoint selections not selected");
+            expect (model.selectedBarCount() == 2, "Two bars selected across ranges");
+            expect (!model.extraSelections.empty(), "Disjoint bar stored as extra range");
+
+            model.toggleAt (5);
+            expect (!model.isSelected (5) && model.isSelected (1), "toggleAt removes a selected bar");
+            expect (model.selectedBarCount() == 1, "One bar left after toggle off");
+
+            // Toggling adjacent bars merges into one contiguous range
+            model.clearSelection();
+            model.setAnchor (4);
+            model.toggleAt (5);
+            model.toggleAt (6);
+            expect (model.isSelected (4) && model.isSelected (5) && model.isSelected (6),
+                    "Adjacent toggles select contiguous bars");
+            expect (model.extraSelections.empty(), "Contiguous toggles merge into the active range");
+
+            model.clearSelection();
+            expect (model.extraSelections.empty() && !model.selection.has_value(),
+                    "clearSelection clears active and extra ranges");
         }
     };
 

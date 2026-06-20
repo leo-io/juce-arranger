@@ -12,8 +12,7 @@
     grid (BarGridComponent inside a juce::Viewport).
 
     It provides:
-      - A header row showing arrangement name, time signature, BPM, bar count and a
-        colour legend for segment labels.
+      - A header row showing arrangement name, time signature, BPM and bar count.
       - A toolbar with zoom stepper ([-] zoom level [+] ) and a selection
         readout label.
       - Follow-transport: during playback, the currently-playing bar is
@@ -37,11 +36,22 @@ public:
 
     void setURL (const juce::URL& url);
     void setArrangement (const Arrangement& arrangement);
+
+    // Lightweight in-place segment relabel: updates the view's arrangement copy
+    // and repaints affected cells without rebuilding geometry, zoom or selection.
+    void applySegmentLabel (int segmentIndex, const juce::String& newName);
+
     void setZoomLevel (int level);
     void setFollowsTransport (bool shouldFollow) noexcept { followTransport = shouldFollow; }
     bool getFollowsTransport() const noexcept { return followTransport; }
     int getZoomLevel() const noexcept { return zoomLevel; }
     juce::Range<int> getSelection() const;
+
+    // Called when the user renames a segment via right-click menu
+    std::function<void(int segmentIndex, juce::String newName)> onSegmentRename;
+
+    // Called when the user renames the arrangement via the inline label editor
+    std::function<void(juce::String newName)> onArrangementRename;
 
     void paint (juce::Graphics&) override;
     void resized() override;
@@ -67,6 +77,9 @@ private:
     // Zoom chip toolbar
     juce::Label zoomChip;
     juce::Label selectionReadout;
+
+    // Editable arrangement name in header
+    juce::Label arrangementNameLabel;
 
     void changeListenerCallback (juce::ChangeBroadcaster*) override;
     void timerCallback() override;

@@ -23,6 +23,9 @@ public:
     // Zoom request: delta (+1 = zoom in, -1 = zoom out), anchorBar = bar to anchor
     std::function<void(int delta, int anchorBar)> onZoomRequest;
 
+    // Rename request: segment index (into Arrangement::segments) and proposed new name
+    std::function<void(int segmentIndex, juce::String newName)> onSegmentRename;
+
     void paint (juce::Graphics&) override;
     void mouseMove (const juce::MouseEvent&) override;
     void mouseEnter (const juce::MouseEvent&) override;

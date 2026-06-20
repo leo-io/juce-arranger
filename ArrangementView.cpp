@@ -51,12 +51,34 @@ ArrangementView::ArrangementView (juce::AudioFormatManager& formatManager,
         catch (...) { juce::Logger::writeToLog ("ArrangementView::onZoomRequest: unknown exception"); }
     };
 
+    // Wire segment rename callback upward
+    grid->onSegmentRename = [this] (int idx, juce::String name)
+    {
+        if (onSegmentRename)
+            onSegmentRename (idx, name);
+    };
+
     addAndMakeVisible (selectionReadout);
     selectionReadout.setFont (juce::FontOptions (12.0f, juce::Font::plain));
     selectionReadout.setJustificationType (juce::Justification::centredRight);
     selectionReadout.setEditable (false, false, false);
     selectionReadout.setText ("Selection: none", juce::dontSendNotification);
     selectionReadout.setColour (juce::Label::textColourId, Palette::textSecondary);
+
+    // Editable arrangement name label in header
+    addAndMakeVisible (arrangementNameLabel);
+    arrangementNameLabel.setFont (juce::FontOptions (12.0f, juce::Font::bold));
+    arrangementNameLabel.setJustificationType (juce::Justification::centredLeft);
+    arrangementNameLabel.setColour (juce::Label::textColourId, Palette::textPrimary);
+    arrangementNameLabel.setColour (juce::Label::backgroundColourId, juce::Colours::transparentBlack);
+    arrangementNameLabel.setColour (juce::Label::backgroundWhenEditingColourId, Palette::surface);
+    arrangementNameLabel.setColour (juce::Label::textWhenEditingColourId, Palette::textPrimary);
+    arrangementNameLabel.setEditable (false, true, false);  // single-click editable
+    arrangementNameLabel.onTextChange = [this]
+    {
+        if (onArrangementRename)
+            onArrangementRename (arrangementNameLabel.getText());
+    };
 
     // Set initial zoom
     setZoomLevel (1);
@@ -86,6 +108,7 @@ void ArrangementView::setURL (const juce::URL& url)
 {
     // Store the filename as a fallback; overridden by arrangement.name in setArrangement
     arrangementName = url.getLocalFile().getFileNameWithoutExtension();
+    arrangementNameLabel.setText (arrangementName, juce::dontSendNotification);
     repaint();
 }
 
@@ -96,6 +119,8 @@ void ArrangementView::setArrangement (const Arrangement& newArrangement)
     // Prefer the name embedded in the JSON; keep the filename fallback set in setURL
     if (!arrangement.name.isEmpty())
         arrangementName = arrangement.name;
+
+    arrangementNameLabel.setText (arrangementName, juce::dontSendNotification);
 
     model.rebuild (arrangement, transportSource.getLengthInSeconds());
     model.applyZoom (arrangement, zoomLevel, transportSource.getLengthInSeconds());
@@ -109,6 +134,18 @@ void ArrangementView::setArrangement (const Arrangement& newArrangement)
     updateZoomControls();
     layoutGrid();
     repaint();
+}
+
+void ArrangementView::applySegmentLabel (int segmentIndex, const juce::String& newName)
+{
+    if (segmentIndex < 0 || segmentIndex >= (int) arrangement.segments.size())
+        return;
+
+    arrangement.segments[segmentIndex].label = newName;
+    model.refreshLabels (arrangement);
+
+    if (grid)
+        grid->repaint();
 }
 
 void ArrangementView::setZoomLevel (int level)
@@ -189,17 +226,10 @@ void ArrangementView::paint (juce::Graphics& g)
         g.setColour (Palette::surfaceElevated);
         g.fillRect (headerBounds);
 
-        // Left: "ARRANGEMENT · "arrangement_name""
-        auto leftHeader = headerBounds.removeFromLeft (headerBounds.getWidth() / 2);
-        g.setColour (Palette::textPrimary);
-        g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
-        juce::String headerText = "ARRANGEMENT";
-        if (! arrangementName.isEmpty())
-            headerText += " \u00b7 \"" + arrangementName + "\"";
-        g.drawText (headerText, leftHeader.reduced (Spacing::pad, 0),
-                    juce::Justification::centredLeft, true);
+        // Left header: arrangementNameLabel paints itself (positioned in resized())
+        headerBounds.removeFromLeft (headerBounds.getWidth() / 2);
 
-        // Right: time signature | BPM | bar count | colour legend
+        // Right: time signature | BPM | bar count
         auto rightHeader = headerBounds.reduced (Spacing::pad, 0);
 
         // Time signature
@@ -228,63 +258,6 @@ void ArrangementView::paint (juce::Graphics& g)
         g.setFont (juce::FontOptions (11.0f, juce::Font::plain));
         g.drawText (infoText, infoArea, juce::Justification::centredRight, true);
 
-        // Colour legend — collect unique segment labels
-        auto legendArea = rightHeader;
-        if (!arrangement.segments.empty())
-        {
-            std::vector<juce::String> uniqueLabels;
-            for (const auto& seg : arrangement.segments)
-            {
-                if (! seg.label.isEmpty())
-                {
-                    bool found = false;
-                    for (const auto& existing : uniqueLabels)
-                    {
-                        if (existing == seg.label)
-                        {
-                            found = true;
-                            break;
-                        }
-                    }
-                    if (! found)
-                        uniqueLabels.push_back (seg.label);
-                }
-            }
-
-            if (! uniqueLabels.empty())
-            {
-                // Draw colour swatches + labels from right to left
-                constexpr int swatchSize = 10;
-                constexpr int swatchGap = 4;
-                int totalSwatchWidth = (int)uniqueLabels.size() * (swatchSize + swatchGap) - swatchGap;
-
-                int legendX = legendArea.getRight() - totalSwatchWidth;
-                if (legendX < legendArea.getX())
-                    legendX = legendArea.getX();
-
-                for (size_t i = 0; i < uniqueLabels.size(); ++i)
-                {
-                    const auto& label = uniqueLabels[i];
-                    juce::Colour swatchColour = arrangement.colourForLabel (label);
-
-                    auto swatchRect = juce::Rectangle<int> (legendX,
-                                                            legendArea.getCentreY() - swatchSize / 2,
-                                                            swatchSize, swatchSize);
-                    g.setColour (swatchColour);
-                    g.fillRect (swatchRect);
-
-                    if (swatchRect.getRight() + 2 + 40 < legendArea.getRight())
-                    {
-                        g.setColour (Palette::textSecondary);
-                        g.setFont (juce::FontOptions (9.0f, juce::Font::plain));
-                        g.drawText (label, swatchRect.translated (swatchSize + 2, 0).withWidth (40),
-                                    juce::Justification::centredLeft, true);
-                    }
-
-                    legendX += swatchSize + swatchGap;
-                }
-            }
-        }
     }
     catch (const std::exception& e) { juce::Logger::writeToLog ("ArrangementView::paint: " + juce::String (e.what())); }
     catch (...) { juce::Logger::writeToLog ("ArrangementView::paint: unknown exception"); }
@@ -299,8 +272,13 @@ void ArrangementView::resized()
     {
         auto r = getLocalBounds();
 
-        // 1. Header
-        r.removeFromTop (Spacing::header);
+        // 1. Header — position the editable arrangement name label
+        {
+            auto headerBand = r.removeFromTop (Spacing::header);
+            auto labelArea = headerBand.removeFromLeft (headerBand.getWidth() / 2)
+                                       .reduced (Spacing::pad, 0);
+            arrangementNameLabel.setBounds (labelArea);
+        }
 
         // 2. Toolbar
         auto toolbarBounds = r.removeFromTop (Spacing::toolbar).reduced (Spacing::pad, 0);
@@ -372,6 +350,17 @@ void ArrangementView::updateSelectionReadout()
             if (firstBar >= 0 && firstBar < (int)model.bars.size()
                 && lastBar >= 0 && lastBar < (int)model.bars.size())
             {
+                if (! model.extraSelections.empty())
+                {
+                    // Multi-selection: report the total number of selected bars.
+                    selectionReadout.setText (
+                        juce::String::formatted ("Selection: %d bars (%d ranges)",
+                                                 model.selectedBarCount(),
+                                                 (int) model.extraSelections.size() + 1),
+                        juce::dontSendNotification);
+                    return;
+                }
+
                 auto timeRange = model.selectionTimeRange();
                 double duration = timeRange.getLength();
 

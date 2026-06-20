@@ -27,8 +27,14 @@ private:
     std::unique_ptr<juce::AudioFormatReaderSource> currentAudioFileSource;
 
     std::unique_ptr<juce::FileChooser> fileChooser;
+    std::unique_ptr<juce::FileChooser> fileChooserSave;
     juce::TextButton openFileButton { "Open JSON File..." };
+    juce::TextButton saveButton     { "Save" };
+    juce::TextButton saveAsButton   { "Save As..." };
     juce::TextButton logToggleButton { "Log" };
+
+    juce::var  currentJson;
+    juce::File currentJsonFile;
 
     std::unique_ptr<ArrangementView> arrangement;
     juce::ApplicationProperties appProperties;

@@ -210,50 +210,70 @@ void BarGridComponent::paint (juce::Graphics& g)
                            juce::Justification::topLeft, false);
             }
 
-            // Draw segment label
-            if (!isSegmentMode && !isWholeArrangement)
-            {
-                // Existing behaviour: label on first bar of run
-                if (bar.isSegmentStart && detail == LabelDetail::NumberAndLabel && !bar.segmentLabel.isEmpty())
-                {
-                    g.setFont (10.0f);
-                    auto labelBounds = cellBounds.reduced (2);
-                    labelBounds.removeFromTop (12);
-                    g.drawText (bar.segmentLabel,
-                               labelBounds,
-                               juce::Justification::topLeft, true);
-                }
-            }
         }
 
-        // Segment mode: draw segment label once per row, right-aligned
-        if (isSegmentMode && !model.rowSpans.empty())
+        // Unified segment-label pass: one prominent label per segment per row, all modes
+        g.setFont (Spacing::segmentLabelFont);
+        for (size_t i = 0; i < model.bars.size(); ++i)
         {
-            for (size_t r = 0; r < model.rowSpans.size(); ++r)
-            {
-                const auto& span = model.rowSpans[r];
-                if (span.firstBar >= 0 && span.firstBar < (int)model.bars.size())
-                {
-                    const auto& firstBar = model.bars[span.firstBar];
-                    if (!firstBar.segmentLabel.isEmpty())
-                    {
-                        // Right-align the segment name on the last cell of the row
-                        int lastBarIdx = span.firstBar + span.barCount - 1;
-                        if (lastBarIdx >= 0 && lastBarIdx < (int)model.bars.size())
-                        {
-                            auto lastBounds = model.cellBounds (lastBarIdx, contentWidth);
-                            auto rowRect = juce::Rectangle<int> (
-                                lastBounds.getX(), lastBounds.getY(),
-                                lastBounds.getWidth(), Spacing::rowHeight);
+            const auto& bar = model.bars[i];
+            if (!bar.isSegmentStart && i != 0)
+                continue;
+            if (bar.segmentLabel.isEmpty())
+                continue;
 
-                            g.setColour (Palette::textSecondary.withAlpha (0.7f));
-                            g.setFont (10.0f);
-                            g.drawText (firstBar.segmentLabel,
-                                       rowRect.reduced (4, 0),
-                                       juce::Justification::centredRight, true);
-                        }
-                    }
+            // Walk forward to find the last bar of this segment on the same row
+            auto startBounds = model.cellBounds ((int)i, contentWidth);
+            int rowY = startBounds.getY();
+            int runEnd = (int)i;
+
+            for (size_t j = i + 1; j < model.bars.size(); ++j)
+            {
+                if (model.bars[j].isSegmentStart)
+                    break;
+                auto jBounds = model.cellBounds ((int)j, contentWidth);
+                if (jBounds.getY() != rowY)
+                    break;
+                runEnd = (int)j;
+            }
+
+            auto endBounds = model.cellBounds (runEnd, contentWidth);
+            auto runRect = juce::Rectangle<int> (startBounds.getX(), rowY,
+                                                 endBounds.getRight() - startBounds.getX(),
+                                                 startBounds.getHeight());
+
+            juce::Colour labelColour = bar.colour.withAlpha (0.40f).contrasting (0.6f);
+            g.setColour (labelColour);
+            g.drawText (bar.segmentLabel, runRect.reduced (Spacing::pad, 0),
+                        juce::Justification::centredLeft, true);
+
+            // If the segment continues on further rows, emit a label on each subsequent row
+            size_t k = (size_t)runEnd + 1;
+            while (k < model.bars.size() && !model.bars[k].isSegmentStart)
+            {
+                auto kBounds = model.cellBounds ((int)k, contentWidth);
+                int newRowY = kBounds.getY();
+                int rowRunEnd = (int)k;
+
+                for (size_t m = k + 1; m < model.bars.size(); ++m)
+                {
+                    if (model.bars[m].isSegmentStart)
+                        break;
+                    auto mBounds = model.cellBounds ((int)m, contentWidth);
+                    if (mBounds.getY() != newRowY)
+                        break;
+                    rowRunEnd = (int)m;
                 }
+
+                auto rowEndBounds = model.cellBounds (rowRunEnd, contentWidth);
+                auto rowRunRect = juce::Rectangle<int> (kBounds.getX(), newRowY,
+                                                        rowEndBounds.getRight() - kBounds.getX(),
+                                                        kBounds.getHeight());
+                g.setColour (labelColour);
+                g.drawText (bar.segmentLabel, rowRunRect.reduced (Spacing::pad, 0),
+                            juce::Justification::centredLeft, true);
+
+                k = (size_t)rowRunEnd + 1;
             }
         }
 
@@ -271,13 +291,10 @@ void BarGridComponent::paint (juce::Graphics& g)
             }
         }
 
-        // Selection rendering: one outline per row-span
-        if (model.selection.has_value())
+        // Selection rendering: one outline per row-span, for the active range and
+        // every additional multi-select range.
+        auto drawRangeOutline = [&] (int firstBar, int lastBar)
         {
-            auto sel = model.selection.value();
-            int firstBar = sel.getStart();
-            int lastBar = sel.getEnd() - 1;
-
             // Group selected bars by row and draw per-row outline
             for (int row = 0; row < model.rowCount(); ++row)
             {
@@ -318,7 +335,16 @@ void BarGridComponent::paint (juce::Graphics& g)
                     g.drawRect (selRect.reduced (1), 1);
                 }
             }
+        };
+
+        if (model.selection.has_value())
+        {
+            auto sel = model.selection.value();
+            drawRangeOutline (sel.getStart(), sel.getEnd() - 1);
         }
+
+        for (const auto& extra : model.extraSelections)
+            drawRangeOutline (extra.getStart(), extra.getEnd() - 1);
 
         // Playing-bar highlight (follow-transport) — soft fill only, no left-edge bar
         if (playingBar.has_value() && transportSource.isPlaying())
@@ -439,14 +465,64 @@ void BarGridComponent::mouseDown (const juce::MouseEvent& e)
 {
     try
     {
+        if (e.mods.isPopupMenu())
+        {
+            auto hitBar = model.barIndexAtExact (e.getPosition(), contentWidth);
+            if (hitBar.has_value())
+            {
+                int barIdx = hitBar.value();
+                int segIdx = (barIdx >= 0 && barIdx < (int)model.bars.size())
+                                 ? model.bars[barIdx].segmentIndex : -1;
+                juce::String currentLabel = (barIdx >= 0 && barIdx < (int)model.bars.size())
+                                                ? model.bars[barIdx].segmentLabel : juce::String();
+
+                if (segIdx >= 0)
+                {
+                    juce::PopupMenu menu;
+                    menu.addItem (1, "Rename segment…");
+                    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this),
+                        [this, segIdx, currentLabel] (int result)
+                        {
+                            if (result != 1 || !onSegmentRename)
+                                return;
+
+                            auto* alertWindow = new juce::AlertWindow ("Rename Segment",
+                                                                       "Enter new segment name:",
+                                                                       juce::MessageBoxIconType::NoIcon);
+                            alertWindow->addTextEditor ("name", currentLabel);
+                            alertWindow->addButton ("OK",     1, juce::KeyPress (juce::KeyPress::returnKey));
+                            alertWindow->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+                            alertWindow->enterModalState (true, juce::ModalCallbackFunction::create (
+                                [this, alertWindow, segIdx] (int modalResult)
+                                {
+                                    if (modalResult == 1 && onSegmentRename)
+                                    {
+                                        auto newName = alertWindow->getTextEditorContents ("name");
+                                        onSegmentRename (segIdx, newName);
+                                    }
+                                    delete alertWindow;
+                                }), false);
+                        });
+                }
+            }
+            return;
+        }
+
         int barIndex = model.barIndexAtClamped (e.getPosition(), contentWidth);
 
-        if (e.mods.isShiftDown() && model.selection.has_value())
+        if (e.mods.isCommandDown())
+        {
+            // Ctrl/Cmd+click: toggle this bar in the multi-selection
+            model.toggleAt (barIndex);
+        }
+        else if (e.mods.isShiftDown() && model.selection.has_value())
         {
             model.extendTo (barIndex);
         }
         else
         {
+            // Plain click: start a fresh single selection
+            model.clearExtraSelections();
             model.setAnchor (barIndex);
         }
 

@@ -16,6 +16,62 @@ MainComponent::MainComponent()
         catch (...) { juce::Logger::writeToLog ("openFileButton.onClick: unknown exception"); }
     };
 
+    addAndMakeVisible (saveButton);
+    saveButton.setEnabled (false);
+    saveButton.onClick = [this] {
+        try
+        {
+            if (currentJsonFile == juce::File{} || ! currentJson.isObject())
+                return;
+            if (! currentJsonFile.replaceWithText (juce::JSON::toString (currentJson)))
+                juce::NativeMessageBox::showAsync (juce::MessageBoxOptions()
+                                                   .withIconType (juce::MessageBoxIconType::WarningIcon)
+                                                   .withTitle ("Save Failed")
+                                                   .withMessage ("Could not write to:\n" + currentJsonFile.getFullPathName()),
+                                                  nullptr);
+        }
+        catch (const std::exception& e) { juce::Logger::writeToLog ("saveButton.onClick: " + juce::String (e.what())); }
+        catch (...) { juce::Logger::writeToLog ("saveButton.onClick: unknown exception"); }
+    };
+
+    addAndMakeVisible (saveAsButton);
+    saveAsButton.setEnabled (false);
+    saveAsButton.onClick = [this] {
+        try
+        {
+            if (fileChooserSave == nullptr)
+            {
+                fileChooserSave = std::make_unique<juce::FileChooser> ("Save As...",
+                                                                        currentJsonFile,
+                                                                        "*.json");
+                fileChooserSave->launchAsync (
+                    juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles,
+                    [this] (const juce::FileChooser& fc)
+                    {
+                        try
+                        {
+                            auto f = fc.getResult();
+                            if (f != juce::File{})
+                            {
+                                currentJsonFile = f;
+                                if (! f.replaceWithText (juce::JSON::toString (currentJson)))
+                                    juce::NativeMessageBox::showAsync (juce::MessageBoxOptions()
+                                                                       .withIconType (juce::MessageBoxIconType::WarningIcon)
+                                                                       .withTitle ("Save Failed")
+                                                                       .withMessage ("Could not write to:\n" + f.getFullPathName()),
+                                                                      nullptr);
+                            }
+                        }
+                        catch (const std::exception& e) { juce::Logger::writeToLog ("saveAsButton.launchAsync: " + juce::String (e.what())); }
+                        catch (...) { juce::Logger::writeToLog ("saveAsButton.launchAsync: unknown exception"); }
+                        fileChooserSave = nullptr;
+                    });
+            }
+        }
+        catch (const std::exception& e) { juce::Logger::writeToLog ("saveAsButton.onClick: " + juce::String (e.what())); }
+        catch (...) { juce::Logger::writeToLog ("saveAsButton.onClick: unknown exception"); }
+    };
+
     // Persistence setup
     {
         juce::PropertiesFile::Options options;
@@ -29,6 +85,39 @@ MainComponent::MainComponent()
     arrangement = std::make_unique<ArrangementView> (formatManager, transportSource, thread);
     addAndMakeVisible (arrangement.get());
     arrangement->addChangeListener (this);
+
+    arrangement->onSegmentRename = [this] (int idx, juce::String newName)
+    {
+        try
+        {
+            if (idx < 0 || idx >= (int)currentArrangement.segments.size())
+                return;
+            currentArrangement.segments[idx].label = newName;
+            // Patch the DOM
+            if (auto* arr = currentJson["arrangement"].getDynamicObject())
+                if (auto* segs = arr->getProperty ("segments").getArray())
+                    if (idx < segs->size())
+                        if (auto* seg = (*segs)[idx].getDynamicObject())
+                            seg->setProperty ("label", newName);
+            arrangement->applySegmentLabel (idx, newName);
+            updateStatus();
+        }
+        catch (const std::exception& e) { juce::Logger::writeToLog ("onSegmentRename: " + juce::String (e.what())); }
+        catch (...) { juce::Logger::writeToLog ("onSegmentRename: unknown exception"); }
+    };
+
+    arrangement->onArrangementRename = [this] (juce::String newName)
+    {
+        try
+        {
+            currentArrangement.name = newName;
+            if (auto* arr = currentJson["arrangement"].getDynamicObject())
+                arr->setProperty ("name", newName);
+            updateStatus();
+        }
+        catch (const std::exception& e) { juce::Logger::writeToLog ("onArrangementRename: " + juce::String (e.what())); }
+        catch (...) { juce::Logger::writeToLog ("onArrangementRename: unknown exception"); }
+    };
 
     // Restore persisted zoom level (default 1 = Segment)
     {
@@ -128,7 +217,12 @@ void MainComponent::resized()
             arrangement->setBounds (r);
 
         auto controlRightBounds = controls.removeFromRight (controls.getWidth() / 3);
-        openFileButton.setBounds (controlRightBounds.removeFromTop (30).reduced (10));
+        {
+            auto buttonRow = controlRightBounds.removeFromTop (30).reduced (0, 2);
+            openFileButton.setBounds (buttonRow.removeFromLeft (150).reduced (4, 0));
+            saveButton.setBounds    (buttonRow.removeFromLeft (60).reduced (4, 0));
+            saveAsButton.setBounds  (buttonRow.removeFromLeft (90).reduced (4, 0));
+        }
         statusLabel.setBounds (controlRightBounds);
 
         followTransportButton.setBounds (controls.removeFromTop (25));
@@ -202,6 +296,8 @@ void MainComponent::showAudioResource (juce::URL resource)
                     return;
                 }
 
+                currentJson = json;
+                currentJsonFile = jsonFile;
                 currentArrangement = Arrangement::fromJsonFile (jsonFile);
                 analysisLoaded = true;
             }
@@ -231,6 +327,8 @@ void MainComponent::showAudioResource (juce::URL resource)
         auto jsonFile = resource.getLocalFile().withFileExtension ("json");
         if (jsonFile.existsAsFile())
         {
+            currentJson = juce::JSON::parse (jsonFile.loadFileAsString());
+            currentJsonFile = jsonFile;
             currentArrangement = Arrangement::fromJsonFile (jsonFile);
             analysisLoaded = true;
         }
@@ -273,6 +371,9 @@ void MainComponent::showAudioResource (juce::URL resource)
 
     if (arrangement)
         arrangement->setArrangement (currentArrangement);
+
+    saveButton.setEnabled (true);
+    saveAsButton.setEnabled (true);
 }
 
 bool MainComponent::loadURLIntoTransport (const juce::URL& audioURL)
@@ -387,19 +488,19 @@ void MainComponent::updateStatus()
             juce::String text;
 
             if (!currentArrangement.name.isEmpty())
-                text += currentArrangement.name + " — ";
+                text += currentArrangement.name + " \u2014 ";
 
             if (currentArrangement.bpm > 0)
             {
                 text += juce::String::formatted ("BPM: %.0f", currentArrangement.bpm);
 
                 if (!currentArrangement.globalKey.isEmpty())
-                    text += " • " + currentArrangement.globalKey;
+                    text += " \u2022 " + currentArrangement.globalKey;
 
                 const Segment* seg = currentArrangement.segmentAt (position);
                 if (seg != nullptr)
                 {
-                    text += " • " + seg->label;
+                    text += " \u2022 " + seg->label;
 
                     if (!seg->localKey.isEmpty())
                         text += " (" + seg->localKey + ")";
@@ -409,7 +510,7 @@ void MainComponent::updateStatus()
 
                 int barNum = currentArrangement.barNumberAt (position);
                 if (barNum > 0)
-                    text += juce::String::formatted (" • Bar %d", barNum);
+                    text += juce::String::formatted (" \u2022 Bar %d", barNum);
             }
             else
             {
