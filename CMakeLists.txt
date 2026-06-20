@@ -17,7 +17,8 @@ target_sources(juce-arranger
         MainComponent.cpp
         TimelineComponent.cpp
         BarGridComponent.cpp
-        ArrangementView.cpp)
+        ArrangementView.cpp
+        SongJsonV2.h)
 
 target_compile_definitions(juce-arranger
     PRIVATE

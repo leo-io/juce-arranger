@@ -20,20 +20,6 @@ ArrangementView::ArrangementView (juce::AudioFormatManager& formatManager,
     // Listen for grid selection/hover changes
     grid->addChangeListener (this);
 
-    // --- Zoom stepper toolbar ---
-
-    auto setupButton = [this] (juce::TextButton& btn, const juce::String& text)
-    {
-        btn.setButtonText (text);
-        btn.setColour (juce::TextButton::buttonColourId, Palette::zoomChipBg);
-        btn.setColour (juce::TextButton::textColourOffId, Palette::textPrimary);
-        btn.setColour (juce::TextButton::textColourOnId, Palette::accent);
-        addAndMakeVisible (btn);
-    };
-
-    setupButton (zoomOut, "-");
-    setupButton (zoomIn, "+");
-
     // Zoom chip label
     addAndMakeVisible (zoomChip);
     zoomChip.setFont (juce::FontOptions (11.0f, juce::Font::plain));
@@ -42,35 +28,6 @@ ArrangementView::ArrangementView (juce::AudioFormatManager& formatManager,
     zoomChip.setColour (juce::Label::backgroundColourId, Palette::zoomChipBg);
     zoomChip.setColour (juce::Label::textColourId, Palette::textSecondary);
     zoomChip.setText ("Zoom: Section", juce::dontSendNotification);
-
-    // Wire zoom stepper buttons
-    zoomOut.onClick = [this]
-    {
-        try
-        {
-            int anchorBar = (grid && grid->getPlayingBar().has_value())
-                                ? grid->getPlayingBar().value()
-                                : (model.selection.has_value() ? model.selection->getStart() : 0);
-            zoomAroundAnchor (zoomLevel - 1, anchorBar, gridViewport.getViewArea().getHeight() / 2);
-            sendChangeMessage();
-        }
-        catch (const std::exception& e) { juce::Logger::writeToLog ("ArrangementView::zoomOut.onClick: " + juce::String (e.what())); }
-        catch (...) { juce::Logger::writeToLog ("ArrangementView::zoomOut.onClick: unknown exception"); }
-    };
-
-    zoomIn.onClick = [this]
-    {
-        try
-        {
-            int anchorBar = (grid && grid->getPlayingBar().has_value())
-                                ? grid->getPlayingBar().value()
-                                : (model.selection.has_value() ? model.selection->getStart() : 0);
-            zoomAroundAnchor (zoomLevel + 1, anchorBar, gridViewport.getViewArea().getHeight() / 2);
-            sendChangeMessage();
-        }
-        catch (const std::exception& e) { juce::Logger::writeToLog ("ArrangementView::zoomIn.onClick: " + juce::String (e.what())); }
-        catch (...) { juce::Logger::writeToLog ("ArrangementView::zoomIn.onClick: unknown exception"); }
-    };
 
     // Wire grid zoom request (Ctrl+wheel, keyboard)
     grid->onZoomRequest = [this] (int delta, int anchorBar)
@@ -342,18 +299,12 @@ void ArrangementView::resized()
         // 2. Toolbar
         auto toolbarBounds = r.removeFromTop (Spacing::toolbar).reduced (Spacing::pad, 0);
 
-        // Toolbar left: [-] zoom chip [+]
-        const int buttonWidth = 32;
+        // Toolbar left: zoom chip
         const int chipWidth = 130;
-        const int buttonHeight = 20;
-        auto buttonArea = toolbarBounds.removeFromLeft (buttonWidth + Spacing::gap + chipWidth + Spacing::gap + buttonWidth);
-        buttonArea.removeFromTop ((toolbarBounds.getHeight() - buttonHeight) / 2);
-
-        zoomOut.setBounds (buttonArea.removeFromLeft (buttonWidth));
-        buttonArea.removeFromLeft (Spacing::gap);
-        zoomChip.setBounds (buttonArea.removeFromLeft (chipWidth));
-        buttonArea.removeFromLeft (Spacing::gap);
-        zoomIn.setBounds (buttonArea.removeFromLeft (buttonWidth));
+        const int chipHeight = 20;
+        auto chipArea = toolbarBounds.removeFromLeft (chipWidth);
+        chipArea.removeFromTop ((toolbarBounds.getHeight() - chipHeight) / 2);
+        zoomChip.setBounds (chipArea.removeFromLeft (chipWidth));
 
         // Toolbar right: selection readout
         selectionReadout.setBounds (toolbarBounds);
@@ -502,12 +453,6 @@ void ArrangementView::timerCallback()
 
 void ArrangementView::updateZoomControls()
 {
-    bool canZoomOut = (zoomLevel > 0);
-    bool canZoomIn  = (zoomLevel < maxZoomLevel);
-
-    zoomOut.setEnabled (canZoomOut);
-    zoomIn.setEnabled (canZoomIn);
-
     zoomChip.setText ("Zoom: " + BarGridModel::zoomLevelName (zoomLevel, maxZoomLevel),
                       juce::dontSendNotification);
 }

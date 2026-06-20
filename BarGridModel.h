@@ -120,11 +120,55 @@ public:
     }
 
     //==========================================================================
+    // Helper: find bars in a segment given a bar's segment label
+
+    struct SegmentSpan
+    {
+        int firstBar = 0;
+        int barCount = 1;
+        juce::String label;
+    };
+
+    SegmentSpan getSegmentSpanForBar (int barIndexZeroBased) const
+    {
+        if (barIndexZeroBased < 0 || barIndexZeroBased >= (int)bars.size())
+            return { 0, 1, juce::String() };
+
+        const juce::String& label = bars[barIndexZeroBased].segmentLabel;
+
+        // Find first bar with this label
+        int firstBar = barIndexZeroBased;
+        while (firstBar > 0 && bars[firstBar - 1].segmentLabel == label)
+            --firstBar;
+
+        // Find last bar with this label
+        int lastBar = barIndexZeroBased;
+        while (lastBar < (int)bars.size() - 1 && bars[lastBar + 1].segmentLabel == label)
+            ++lastBar;
+
+        return { firstBar, lastBar - firstBar + 1, label };
+    }
+
+    //==========================================================================
     // Layout methods
+
+    int maxBarsInAnyRow() const
+    {
+        int m = 1;
+        for (const auto& s : rowSpans)
+            m = juce::jmax (m, s.barCount);
+        return m;
+    }
 
     int cellWidth (int viewportWidth) const
     {
         return juce::jmax (1, viewportWidth / juce::jmax (1, barsPerRow));
+    }
+
+    int cellWidthForBarSection (int barIndexZeroBased, int viewportWidth) const
+    {
+        auto span = getSegmentSpanForBar (barIndexZeroBased);
+        return juce::jmax (1, viewportWidth / juce::jmax (1, span.barCount));
     }
 
     int rowCount() const
@@ -164,19 +208,20 @@ public:
                 const auto& span = rowSpans[r];
                 if (barIndexZeroBased >= span.firstBar && barIndexZeroBased < span.firstBar + span.barCount)
                 {
+                    int maxBars = maxBarsInAnyRow();
                     int col = barIndexZeroBased - span.firstBar;
-                    int cw = juce::jmax (1, viewportWidth / juce::jmax (1, span.barCount));
+                    int cw = juce::jmax (1, viewportWidth / juce::jmax (1, maxBars));
                     return juce::Rectangle<int> (col * cw, (int)r * Spacing::rowHeight, cw, Spacing::rowHeight);
                 }
             }
             return juce::Rectangle<int>();
         }
 
-        // Fixed or WholeSong: uniform grid
-        int cw = cellWidth (viewportWidth);
-        int col = barIndexZeroBased % barsPerRow;
-        int row = barIndexZeroBased / barsPerRow;
-
+        // Fixed and WholeSong: uniform cell width
+        int bpRow = juce::jmax (1, barsPerRow);
+        int cw  = juce::jmax (1, viewportWidth / bpRow);
+        int col = barIndexZeroBased % bpRow;
+        int row = barIndexZeroBased / bpRow;
         return juce::Rectangle<int> (col * cw, row * Spacing::rowHeight, cw, Spacing::rowHeight);
     }
 
@@ -195,8 +240,9 @@ public:
             if (row < 0 || row >= (int)rowSpans.size())
                 return std::nullopt;
 
+            int maxBars = maxBarsInAnyRow();
+            int cw = juce::jmax (1, viewportWidth / juce::jmax (1, maxBars));
             const auto& span = rowSpans[row];
-            int cw = juce::jmax (1, viewportWidth / juce::jmax (1, span.barCount));
             int col = p.x / cw;
 
             if (col < 0 || col >= span.barCount)
@@ -209,20 +255,22 @@ public:
             return barIndex;
         }
 
-        int cw = cellWidth (viewportWidth);
-        if (cw <= 0)
+        // WholeSong and Fixed: hit testing via cellBounds
+        if (row < 0 || row >= rowCount())
             return std::nullopt;
 
-        int col = p.x / cw;
+        // For each bar in this row, check if p.x falls within it
+        int rowStartBar = row * barsPerRow;
+        int rowEndBar = juce::jmin ((row + 1) * barsPerRow, (int)bars.size());
 
-        if (col < 0 || col >= barsPerRow || row < 0)
-            return std::nullopt;
+        for (int barIdx = rowStartBar; barIdx < rowEndBar; ++barIdx)
+        {
+            auto bounds = cellBounds (barIdx, viewportWidth);
+            if (bounds.contains (p.x, p.y))
+                return barIdx;
+        }
 
-        int barIndex = row * barsPerRow + col;
-        if (barIndex >= (int)bars.size())
-            return std::nullopt; // Trailing empty cell in last row
-
-        return barIndex;
+        return std::nullopt;
     }
 
     int barIndexAtClamped (juce::Point<int> p, int viewportWidth) const
@@ -241,20 +289,34 @@ public:
             if (row >= (int)rowSpans.size())
                 row = (int)rowSpans.size() - 1;
 
+            int maxBars = maxBarsInAnyRow();
+            int cw = juce::jmax (1, viewportWidth / juce::jmax (1, maxBars));
             const auto& span = rowSpans[row];
-            int cw = juce::jmax (1, viewportWidth / juce::jmax (1, span.barCount));
             int col = juce::jlimit (0, span.barCount - 1, p.x / cw);
 
             int barIndex = span.firstBar + col;
             return juce::jlimit (0, (int)bars.size() - 1, barIndex);
         }
 
-        // Clamp to nearest valid bar (Fixed/WholeSong)
-        int cw = cellWidth (viewportWidth);
-        int col = juce::jlimit (0, barsPerRow - 1, p.x / juce::jmax (1, cw));
+        // WholeSong and Fixed: clamp to nearest valid bar
+        int rowStartBar = row * barsPerRow;
+        int rowEndBar = juce::jmin ((row + 1) * barsPerRow, (int)bars.size());
 
-        int barIndex = row * barsPerRow + col;
-        return juce::jlimit (0, (int)bars.size() - 1, barIndex);
+        // Find closest bar in this row
+        int closestBar = rowStartBar;
+        int closestDist = std::abs (p.x - cellBounds (rowStartBar, viewportWidth).getCentreX());
+
+        for (int barIdx = rowStartBar + 1; barIdx < rowEndBar; ++barIdx)
+        {
+            int dist = std::abs (p.x - cellBounds (barIdx, viewportWidth).getCentreX());
+            if (dist < closestDist)
+            {
+                closestDist = dist;
+                closestBar = barIdx;
+            }
+        }
+
+        return juce::jlimit (0, (int)bars.size() - 1, closestBar);
     }
 
     //==========================================================================

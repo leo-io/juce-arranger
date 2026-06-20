@@ -8,6 +8,7 @@ struct Segment
     double start = 0.0;
     double end = 0.0;
     juce::String label;
+    juce::String audioSource;
 };
 
 class SongAnalysis
@@ -19,67 +20,7 @@ public:
     std::vector<int> beatPositions;
     std::vector<Segment> segments;
 
-    static SongAnalysis fromJsonFile (const juce::File& jsonFile)
-    {
-        SongAnalysis result;
-
-        if (!jsonFile.existsAsFile())
-            return result;
-
-        auto json = juce::JSON::parse (jsonFile);
-
-        if (!json.isObject())
-            return result;
-
-        result.bpm = json.getProperty ("bpm", 0.0);
-
-        if (auto beatsVar = json["beats"])
-        {
-            if (auto* beatsArray = beatsVar.getArray())
-            {
-                for (const auto& beatVar : *beatsArray)
-                    result.beats.push_back ((double)beatVar);
-            }
-        }
-
-        if (auto downbeatsVar = json["downbeats"])
-        {
-            if (auto* downbeatsArray = downbeatsVar.getArray())
-            {
-                for (const auto& downbeatVar : *downbeatsArray)
-                    result.downbeats.push_back ((double)downbeatVar);
-            }
-        }
-
-        if (auto positionsVar = json["beat_positions"])
-        {
-            if (auto* positionsArray = positionsVar.getArray())
-            {
-                for (const auto& posVar : *positionsArray)
-                    result.beatPositions.push_back ((int)posVar);
-            }
-        }
-
-        if (auto segmentsVar = json["segments"])
-        {
-            if (auto* segmentsArray = segmentsVar.getArray())
-            {
-                for (const auto& segVar : *segmentsArray)
-                {
-                    if (segVar.isObject())
-                    {
-                        Segment seg;
-                        seg.start = segVar.getProperty ("start", 0.0);
-                        seg.end = segVar.getProperty ("end", 0.0);
-                        seg.label = segVar.getProperty ("label", "").toString();
-                        result.segments.push_back (seg);
-                    }
-                }
-            }
-        }
-
-        return result;
-    }
+    static SongAnalysis fromJsonFile (const juce::File& jsonFile);
 
     juce::Colour colourForLabel (const juce::String& label) const
     {
@@ -122,3 +63,84 @@ public:
         return nullptr;
     }
 };
+
+//==============================================================================
+// Include the v2 format helper (needs SongAnalysis to be fully defined first).
+// fromJsonFile is defined here so it can branch on the format.
+//==============================================================================
+#include "SongJsonV2.h"
+
+inline SongAnalysis SongAnalysis::fromJsonFile (const juce::File& jsonFile)
+{
+    SongAnalysis result;
+
+    if (!jsonFile.existsAsFile())
+        return result;
+
+    auto jsonStr = jsonFile.loadFileAsString();
+    auto json = juce::JSON::parse (jsonStr);
+
+    if (!json.isObject())
+        return result;
+
+    //--------------------------------------------------------------------------
+    // Branch: v2 sections→bars→beats vs old flat-array format
+    //--------------------------------------------------------------------------
+    if (SongJsonV2::isV2 (json))
+    {
+        SongJsonV2::parseV2Into (json, result);
+        return result;
+    }
+
+    //--------------------------------------------------------------------------
+    // Old-format parsing (flat arrays)
+    //--------------------------------------------------------------------------
+    result.bpm = json.getProperty ("bpm", 0.0);
+
+    if (auto beatsVar = json["beats"])
+    {
+        if (auto* beatsArray = beatsVar.getArray())
+        {
+            for (const auto& beatVar : *beatsArray)
+                result.beats.push_back ((double)beatVar);
+        }
+    }
+
+    if (auto downbeatsVar = json["downbeats"])
+    {
+        if (auto* downbeatsArray = downbeatsVar.getArray())
+        {
+            for (const auto& downbeatVar : *downbeatsArray)
+                result.downbeats.push_back ((double)downbeatVar);
+        }
+    }
+
+    if (auto positionsVar = json["beat_positions"])
+    {
+        if (auto* positionsArray = positionsVar.getArray())
+        {
+            for (const auto& posVar : *positionsArray)
+                result.beatPositions.push_back ((int)posVar);
+        }
+    }
+
+    if (auto segmentsVar = json["segments"])
+    {
+        if (auto* segmentsArray = segmentsVar.getArray())
+        {
+            for (const auto& segVar : *segmentsArray)
+            {
+                if (segVar.isObject())
+                {
+                    Segment seg;
+                    seg.start = segVar.getProperty ("start", 0.0);
+                    seg.end = segVar.getProperty ("end", 0.0);
+                    seg.label = segVar.getProperty ("label", "").toString();
+                    result.segments.push_back (seg);
+                }
+            }
+        }
+    }
+
+    return result;
+}

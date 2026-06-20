@@ -64,9 +64,7 @@ private:
     juce::Viewport gridViewport;
     std::unique_ptr<BarGridComponent> grid;
 
-    // Zoom stepper toolbar
-    juce::TextButton zoomOut { "-" };
-    juce::TextButton zoomIn  { "+" };
+    // Zoom chip toolbar
     juce::Label zoomChip;
     juce::Label selectionReadout;
 

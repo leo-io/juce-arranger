@@ -142,6 +142,7 @@ void MainComponent::resized()
 void MainComponent::showAudioResource (juce::URL resource)
 {
     juce::URL audioURL = resource;
+    bool analysisLoaded = false;
 
     // If the resource is a JSON file, extract the audio path from it
     if (resource.getLocalFile().getFileExtension().toLowerCase() == ".json")
@@ -154,18 +155,47 @@ void MainComponent::showAudioResource (juce::URL resource)
 
             if (json.isObject() || json.isArray())
             {
-                // Try to get path field
-                auto pathVar = json.getProperty ("path", juce::var());
-                auto audioPath = pathVar.toString();
+                juce::String originalAudioPath;
 
-                if (!audioPath.isEmpty())
+                //--------------------------------------------------------------------------
+                // Extract audio path — v2 uses sections[0].audioSource, old uses top-level path
+                //--------------------------------------------------------------------------
+                if (SongJsonV2::isV2 (json))
+                {
+                    auto sections = json["sections"];
+                    if (auto* sectionsArray = sections.getArray())
+                    {
+                        if (sectionsArray->size() > 0)
+                        {
+                            auto firstSection = (*sectionsArray)[0];
+                            originalAudioPath = firstSection.getProperty ("audioSource", "").toString();
+                        }
+                    }
+
+                    if (originalAudioPath.isEmpty())
+                    {
+                        juce::NativeMessageBox::showAsync (juce::MessageBoxOptions()
+                                                          .withIconType (juce::MessageBoxIconType::WarningIcon)
+                                                          .withTitle ("Error")
+                                                          .withMessage ("v2 JSON file has empty or missing 'audioSource' in first section"),
+                                                         nullptr);
+                        return;
+                    }
+                }
+                else
+                {
+                    // Old format: top-level path field
+                    originalAudioPath = json.getProperty ("path", "").toString();
+                }
+
+                if (!originalAudioPath.isEmpty())
                 {
                     auto jsonDir = jsonFile.getParentDirectory();
 
                     // Resolve the path as written: absolute, or relative to the JSON file.
-                    auto audioFile = juce::File::isAbsolutePath (audioPath)
-                                         ? juce::File (audioPath)
-                                         : jsonDir.getChildFile (audioPath);
+                    auto audioFile = juce::File::isAbsolutePath (originalAudioPath)
+                                         ? juce::File (originalAudioPath)
+                                         : jsonDir.getChildFile (originalAudioPath);
 
                     // Common case: the JSON embeds an absolute path produced on another
                     // machine/folder, so it won't exist here. Fall back to the .wav of the
@@ -173,8 +203,8 @@ void MainComponent::showAudioResource (juce::URL resource)
                     // filename whether the stored path used '\' or '/' separators.
                     if (! audioFile.existsAsFile())
                     {
-                        auto fileName = audioPath.replaceCharacter ('\\', '/')
-                                                 .fromLastOccurrenceOf ("/", false, false);
+                        auto fileName = originalAudioPath.replaceCharacter ('\\', '/')
+                                                         .fromLastOccurrenceOf ("/", false, false);
                         auto sibling = jsonDir.getChildFile (fileName);
                         if (sibling.existsAsFile())
                             audioFile = sibling;
@@ -187,9 +217,32 @@ void MainComponent::showAudioResource (juce::URL resource)
                     juce::NativeMessageBox::showAsync (juce::MessageBoxOptions()
                                                       .withIconType (juce::MessageBoxIconType::WarningIcon)
                                                       .withTitle ("Error")
-                                                      .withMessage ("JSON file has empty or missing 'path' field"),
+                                                      .withMessage (SongJsonV2::isV2 (json)
+                                                                    ? "v2 JSON file has empty or missing 'audioSource' in first section"
+                                                                    : "JSON file has empty or missing 'path' field"),
                                                      nullptr);
                     return;
+                }
+
+                //--------------------------------------------------------------------------
+                // Load analysis from JSON (auto-convert old format to v2 on first load)
+                //--------------------------------------------------------------------------
+                currentAnalysis = SongAnalysis::fromJsonFile (jsonFile);
+                analysisLoaded = true;
+
+                if (! SongJsonV2::isV2 (json))
+                {
+                    // Old format: write a v2 working copy alongside the original
+                    auto outFile = jsonFile.getSiblingFile (
+                        jsonFile.getFileNameWithoutExtension() + ".arranger.json");
+
+                    if (! outFile.existsAsFile())
+                    {
+                        if (SongJsonV2::writeV2File (currentAnalysis, originalAudioPath, outFile))
+                            juce::Logger::writeToLog ("Wrote v2 analysis: " + outFile.getFullPathName());
+                        else
+                            juce::Logger::writeToLog ("Failed to write v2 analysis: " + outFile.getFullPathName());
+                    }
                 }
             }
             else
@@ -211,9 +264,6 @@ void MainComponent::showAudioResource (juce::URL resource)
                                              nullptr);
             return;
         }
-
-        // Load analysis from the JSON file
-        currentAnalysis = SongAnalysis::fromJsonFile (jsonFile);
     }
     else
     {
@@ -222,12 +272,18 @@ void MainComponent::showAudioResource (juce::URL resource)
         if (jsonFile.existsAsFile())
         {
             currentAnalysis = SongAnalysis::fromJsonFile (jsonFile);
+            analysisLoaded = true;
         }
         else
         {
             currentAnalysis = SongAnalysis();
+            analysisLoaded = true;
         }
     }
+
+    // If analysis was not yet loaded (should not happen, but safety net), create empty
+    if (! analysisLoaded)
+        currentAnalysis = SongAnalysis();
 
     auto audioFile = audioURL.getLocalFile();
     if (!audioFile.existsAsFile())

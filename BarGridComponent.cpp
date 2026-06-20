@@ -149,26 +149,26 @@ void BarGridComponent::paint (juce::Graphics& g)
         {
             const auto& bar = model.bars[i];
             auto cellBounds = model.cellBounds ((int)i, contentWidth);
+            auto segSpan = model.getSegmentSpanForBar ((int)i);
 
             // Fill cell with segment colour (40% alpha)
             g.setColour (bar.colour.withAlpha (0.40f));
             g.fillRect (cellBounds);
 
-            if (isWholeSong)
+            bool isLargSection = segSpan.barCount >= 4;
+
+            if (isWholeSong || isSectionMode)
             {
-                // WholeSong: hairline at section boundaries only
-                if (bar.isSegmentStart)
-                {
-                    g.setColour (Palette::gridStrong);
-                    g.fillRect (cellBounds.getX(), cellBounds.getY(),
-                                Spacing::sectionDivider, cellBounds.getHeight());
-                }
+                // No bar outlines or section dividers — pure colour fills only
             }
             else
             {
-                // Cell outline (hairline)
-                g.setColour (Palette::divider);
-                g.drawRect (cellBounds, 1);
+                // Skip cell outlines for large sections (4+ bars)
+                if (!isLargSection)
+                {
+                    g.setColour (Palette::divider);
+                    g.drawRect (cellBounds, 1);
+                }
 
                 // Bold divider at section boundaries
                 if (bar.isSegmentStart)
@@ -187,20 +187,18 @@ void BarGridComponent::paint (juce::Graphics& g)
             int perCellWidth = cellBounds.getWidth();
             auto detail = model.labelDetailFor (perCellWidth);
 
-            // Draw bar number based on density
+            // Draw bar number based on density (never in WholeSong or Section mode)
             bool drawNumber = false;
-            if (detail == LabelDetail::NumberAndLabel || detail == LabelDetail::NumberOnly)
+            if (!isWholeSong && !isSectionMode)
             {
-                drawNumber = true;
-            }
-            else if (detail == LabelDetail::SparseNumber)
-            {
-                if (isWholeSong)
-                    drawNumber = (bar.index1Based % 8 == 1); // even sparser in song overview
-                else if (isSectionMode)
-                    drawNumber = (bar.isSegmentStart); // first bar of section
-                else
+                if (detail == LabelDetail::NumberAndLabel || detail == LabelDetail::NumberOnly)
+                {
+                    drawNumber = true;
+                }
+                else if (detail == LabelDetail::SparseNumber)
+                {
                     drawNumber = (bar.index1Based % 4 == 1);
+                }
             }
 
             if (drawNumber)
