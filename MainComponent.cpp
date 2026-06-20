@@ -30,7 +30,7 @@ MainComponent::MainComponent()
     addAndMakeVisible (arrangement.get());
     arrangement->addChangeListener (this);
 
-    // Restore persisted zoom level (default 1 = Section)
+    // Restore persisted zoom level (default 1 = Segment)
     {
         int n = appProperties.getUserSettings()->getIntValue ("zoomLevel", 1);
         arrangement->setZoomLevel (n);
@@ -153,39 +153,20 @@ void MainComponent::showAudioResource (juce::URL resource)
             auto jsonText = jsonFile.loadFileAsString();
             auto json = juce::JSON::parse (jsonText);
 
-            if (json.isObject() || json.isArray())
+            if (json.isObject())
             {
                 juce::String originalAudioPath;
 
                 //--------------------------------------------------------------------------
-                // Extract audio path — v2 uses sections[0].audioSource, old uses top-level path
+                // Extract audio path from arrangement.segments[0].audioSource
                 //--------------------------------------------------------------------------
-                if (SongJsonV2::isV2 (json))
                 {
-                    auto sections = json["sections"];
-                    if (auto* sectionsArray = sections.getArray())
+                    auto segments = json["arrangement"]["segments"];
+                    if (auto* segmentsArray = segments.getArray())
                     {
-                        if (sectionsArray->size() > 0)
-                        {
-                            auto firstSection = (*sectionsArray)[0];
-                            originalAudioPath = firstSection.getProperty ("audioSource", "").toString();
-                        }
+                        if (segmentsArray->size() > 0)
+                            originalAudioPath = (*segmentsArray)[0].getProperty ("audioSource", "").toString();
                     }
-
-                    if (originalAudioPath.isEmpty())
-                    {
-                        juce::NativeMessageBox::showAsync (juce::MessageBoxOptions()
-                                                          .withIconType (juce::MessageBoxIconType::WarningIcon)
-                                                          .withTitle ("Error")
-                                                          .withMessage ("v2 JSON file has empty or missing 'audioSource' in first section"),
-                                                         nullptr);
-                        return;
-                    }
-                }
-                else
-                {
-                    // Old format: top-level path field
-                    originalAudioPath = json.getProperty ("path", "").toString();
                 }
 
                 if (!originalAudioPath.isEmpty())
@@ -199,8 +180,7 @@ void MainComponent::showAudioResource (juce::URL resource)
 
                     // Common case: the JSON embeds an absolute path produced on another
                     // machine/folder, so it won't exist here. Fall back to the .wav of the
-                    // same name sitting next to the JSON file. juce::File extracts the bare
-                    // filename whether the stored path used '\' or '/' separators.
+                    // same name sitting next to the JSON file.
                     if (! audioFile.existsAsFile())
                     {
                         auto fileName = originalAudioPath.replaceCharacter ('\\', '/')
@@ -217,33 +197,13 @@ void MainComponent::showAudioResource (juce::URL resource)
                     juce::NativeMessageBox::showAsync (juce::MessageBoxOptions()
                                                       .withIconType (juce::MessageBoxIconType::WarningIcon)
                                                       .withTitle ("Error")
-                                                      .withMessage (SongJsonV2::isV2 (json)
-                                                                    ? "v2 JSON file has empty or missing 'audioSource' in first section"
-                                                                    : "JSON file has empty or missing 'path' field"),
+                                                      .withMessage ("JSON file has empty or missing 'audioSource' in first segment"),
                                                      nullptr);
                     return;
                 }
 
-                //--------------------------------------------------------------------------
-                // Load analysis from JSON (auto-convert old format to v2 on first load)
-                //--------------------------------------------------------------------------
-                currentAnalysis = SongAnalysis::fromJsonFile (jsonFile);
+                currentArrangement = Arrangement::fromJsonFile (jsonFile);
                 analysisLoaded = true;
-
-                if (! SongJsonV2::isV2 (json))
-                {
-                    // Old format: write a v2 working copy alongside the original
-                    auto outFile = jsonFile.getSiblingFile (
-                        jsonFile.getFileNameWithoutExtension() + ".arranger.json");
-
-                    if (! outFile.existsAsFile())
-                    {
-                        if (SongJsonV2::writeV2File (currentAnalysis, originalAudioPath, outFile))
-                            juce::Logger::writeToLog ("Wrote v2 analysis: " + outFile.getFullPathName());
-                        else
-                            juce::Logger::writeToLog ("Failed to write v2 analysis: " + outFile.getFullPathName());
-                    }
-                }
             }
             else
             {
@@ -271,19 +231,19 @@ void MainComponent::showAudioResource (juce::URL resource)
         auto jsonFile = resource.getLocalFile().withFileExtension ("json");
         if (jsonFile.existsAsFile())
         {
-            currentAnalysis = SongAnalysis::fromJsonFile (jsonFile);
+            currentArrangement = Arrangement::fromJsonFile (jsonFile);
             analysisLoaded = true;
         }
         else
         {
-            currentAnalysis = SongAnalysis();
+            currentArrangement = Arrangement();
             analysisLoaded = true;
         }
     }
 
     // If analysis was not yet loaded (should not happen, but safety net), create empty
     if (! analysisLoaded)
-        currentAnalysis = SongAnalysis();
+        currentArrangement = Arrangement();
 
     auto audioFile = audioURL.getLocalFile();
     if (!audioFile.existsAsFile())
@@ -312,7 +272,7 @@ void MainComponent::showAudioResource (juce::URL resource)
         arrangement->setURL (currentAudioFile);
 
     if (arrangement)
-        arrangement->setAnalysis (currentAnalysis);
+        arrangement->setArrangement (currentArrangement);
 }
 
 bool MainComponent::loadURLIntoTransport (const juce::URL& audioURL)
@@ -426,15 +386,28 @@ void MainComponent::updateStatus()
             auto position = transportSource.getCurrentPosition();
             juce::String text;
 
-            if (currentAnalysis.bpm > 0)
-            {
-                text += juce::String::formatted ("BPM: %.0f", currentAnalysis.bpm);
+            if (!currentArrangement.name.isEmpty())
+                text += currentArrangement.name + " — ";
 
-                const Segment* seg = currentAnalysis.segmentAt (position);
+            if (currentArrangement.bpm > 0)
+            {
+                text += juce::String::formatted ("BPM: %.0f", currentArrangement.bpm);
+
+                if (!currentArrangement.globalKey.isEmpty())
+                    text += " • " + currentArrangement.globalKey;
+
+                const Segment* seg = currentArrangement.segmentAt (position);
                 if (seg != nullptr)
+                {
                     text += " • " + seg->label;
 
-                int barNum = currentAnalysis.barNumberAt (position);
+                    if (!seg->localKey.isEmpty())
+                        text += " (" + seg->localKey + ")";
+                    else if (seg->localBpm > 0.0 && seg->localBpm != currentArrangement.bpm)
+                        text += juce::String::formatted (" (%.0f bpm)", seg->localBpm);
+                }
+
+                int barNum = currentArrangement.barNumberAt (position);
                 if (barNum > 0)
                     text += juce::String::formatted (" • Bar %d", barNum);
             }

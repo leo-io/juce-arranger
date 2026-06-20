@@ -2,7 +2,7 @@
 
 #include <juce_audio_utils/juce_audio_utils.h>
 #include "DemoUtilities.h"
-#include "SongAnalysis.h"
+#include "Arrangement.h"
 
 class TimelineComponent : public juce::Component,
                           public juce::ChangeListener,
@@ -19,7 +19,7 @@ public:
     ~TimelineComponent() override;
 
     void setURL (const juce::URL& url);
-    void setAnalysis (const SongAnalysis& analysis);
+    void setArrangement (const Arrangement& arrangement);
 
     juce::URL getLastDroppedFile() const noexcept { return lastFileDropped; }
 
@@ -53,7 +53,7 @@ private:
 
     juce::DrawableRectangle currentPositionMarker;
 
-    SongAnalysis analysis;
+    Arrangement arrangement;
 
     float timeToX (const double time) const;
     double xToTime (const float x) const;

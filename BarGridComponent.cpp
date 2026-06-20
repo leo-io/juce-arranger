@@ -141,8 +141,8 @@ void BarGridComponent::paint (juce::Graphics& g)
             return;
         }
 
-        bool isSectionMode = (model.mode == GridMode::Section);
-        bool isWholeSong   = (model.mode == GridMode::WholeSong);
+        bool isSegmentMode = (model.mode == GridMode::Segment);
+        bool isWholeArrangement = (model.mode == GridMode::WholeArrangement);
 
         // Draw each bar cell
         for (size_t i = 0; i < model.bars.size(); ++i)
@@ -155,27 +155,27 @@ void BarGridComponent::paint (juce::Graphics& g)
             g.setColour (bar.colour.withAlpha (0.40f));
             g.fillRect (cellBounds);
 
-            bool isLargSection = segSpan.barCount >= 4;
+            bool isLargeSegment = segSpan.barCount >= 4;
 
-            if (isWholeSong || isSectionMode)
+            if (isWholeArrangement || isSegmentMode)
             {
-                // No bar outlines or section dividers — pure colour fills only
+                // No bar outlines or segment dividers — pure colour fills only
             }
             else
             {
-                // Skip cell outlines for large sections (4+ bars)
-                if (!isLargSection)
+                // Skip cell outlines for large segments (4+ bars)
+                if (!isLargeSegment)
                 {
                     g.setColour (Palette::divider);
                     g.drawRect (cellBounds, 1);
                 }
 
-                // Bold divider at section boundaries
+                // Bold divider at segment boundaries
                 if (bar.isSegmentStart)
                 {
                     g.setColour (Palette::gridStrong);
                     g.fillRect (cellBounds.getX(), cellBounds.getY(),
-                                Spacing::sectionDivider, cellBounds.getHeight());
+                                Spacing::segmentDivider, cellBounds.getHeight());
                 }
             }
 
@@ -183,13 +183,13 @@ void BarGridComponent::paint (juce::Graphics& g)
             juce::Colour labelColour = bar.colour.withAlpha (0.40f).contrasting (0.6f);
             g.setColour (labelColour);
 
-            // Determine label density: in Section mode use per-row cell width
+            // Determine label density: in Segment mode use per-row cell width
             int perCellWidth = cellBounds.getWidth();
             auto detail = model.labelDetailFor (perCellWidth);
 
-            // Draw bar number based on density (never in WholeSong or Section mode)
+            // Draw bar number based on density (never in WholeArrangement or Segment mode)
             bool drawNumber = false;
-            if (!isWholeSong && !isSectionMode)
+            if (!isWholeArrangement && !isSegmentMode)
             {
                 if (detail == LabelDetail::NumberAndLabel || detail == LabelDetail::NumberOnly)
                 {
@@ -203,7 +203,7 @@ void BarGridComponent::paint (juce::Graphics& g)
 
             if (drawNumber)
             {
-                g.setFont (isWholeSong ? 8.0f : 10.0f);
+                g.setFont (isWholeArrangement ? 8.0f : 10.0f);
                 auto numberBounds = cellBounds.reduced (2);
                 g.drawText (juce::String (bar.index1Based),
                            numberBounds,
@@ -211,7 +211,7 @@ void BarGridComponent::paint (juce::Graphics& g)
             }
 
             // Draw segment label
-            if (!isSectionMode && !isWholeSong)
+            if (!isSegmentMode && !isWholeArrangement)
             {
                 // Existing behaviour: label on first bar of run
                 if (bar.isSegmentStart && detail == LabelDetail::NumberAndLabel && !bar.segmentLabel.isEmpty())
@@ -226,8 +226,8 @@ void BarGridComponent::paint (juce::Graphics& g)
             }
         }
 
-        // Section mode: draw section label once per row, right-aligned
-        if (isSectionMode && !model.rowSpans.empty())
+        // Segment mode: draw segment label once per row, right-aligned
+        if (isSegmentMode && !model.rowSpans.empty())
         {
             for (size_t r = 0; r < model.rowSpans.size(); ++r)
             {
@@ -237,7 +237,7 @@ void BarGridComponent::paint (juce::Graphics& g)
                     const auto& firstBar = model.bars[span.firstBar];
                     if (!firstBar.segmentLabel.isEmpty())
                     {
-                        // Right-align the section name on the last cell of the row
+                        // Right-align the segment name on the last cell of the row
                         int lastBarIdx = span.firstBar + span.barCount - 1;
                         if (lastBarIdx >= 0 && lastBarIdx < (int)model.bars.size())
                         {
@@ -282,7 +282,7 @@ void BarGridComponent::paint (juce::Graphics& g)
             for (int row = 0; row < model.rowCount(); ++row)
             {
                 int rowStart, rowEnd;
-                if (isSectionMode && !model.rowSpans.empty() && row < (int)model.rowSpans.size())
+                if (isSegmentMode && !model.rowSpans.empty() && row < (int)model.rowSpans.size())
                 {
                     rowStart = model.rowSpans[row].firstBar;
                     rowEnd = rowStart + model.rowSpans[row].barCount;
@@ -622,7 +622,7 @@ bool BarGridComponent::keyPressed (const juce::KeyPress& key)
         }
         else if (key.isKeyCode ('0') && key.getModifiers().isCtrlDown())
         {
-            // Ctrl+0 jump to Song overview (level 0)
+            // Ctrl+0 jump to Arrangement overview (level 0)
             int anchorBar = (playingBar.has_value() ? playingBar.value()
                             : (model.selection.has_value() ? model.selection->getStart() : 0));
             // We request a delta that goes to level 0. Since we don't know current level,

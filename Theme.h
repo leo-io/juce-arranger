@@ -12,7 +12,7 @@ namespace Palette
     const juce::Colour accent          { 0xff7cb8ff }; // selection / highlight
     const juce::Colour playhead        { 0xffff5c5c }; // transport playhead line/triangle (warm red)
     const juce::Colour playheadDim     { 0x80ff5c5c }; // stopped-state seek cursor (50% alpha)
-    const juce::Colour gridStrong      { 0xff52565c }; // bold section-boundary divider (2 px)
+    const juce::Colour gridStrong      { 0xff52565c }; // bold segment-boundary divider (2 px)
     const juce::Colour zoomChipBg      { 0xff2a2c30 }; // zoom stepper chip background (= surfaceElevated)
 }
 
@@ -28,5 +28,5 @@ namespace Spacing
     constexpr int playheadWidth  = 2;    // playhead line thickness (logical px)
     constexpr int playheadCap    = 7;    // triangle cap base width
     constexpr int minCellPx      = 6;    // cell width floor before density downgrade
-    constexpr int sectionDivider = 2;    // bold divider weight at section boundaries
+    constexpr int segmentDivider = 2;    // bold divider weight at segment boundaries
 }

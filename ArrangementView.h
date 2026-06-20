@@ -3,7 +3,7 @@
 #include <juce_audio_utils/juce_audio_utils.h>
 #include "BarGridModel.h"
 #include "BarGridComponent.h"
-#include "SongAnalysis.h"
+#include "Arrangement.h"
 #include "Theme.h"
 
 //==============================================================================
@@ -12,7 +12,7 @@
     grid (BarGridComponent inside a juce::Viewport).
 
     It provides:
-      - A header row showing song name, time signature, BPM, bar count and a
+      - A header row showing arrangement name, time signature, BPM, bar count and a
         colour legend for segment labels.
       - A toolbar with zoom stepper ([-] zoom level [+] ) and a selection
         readout label.
@@ -36,7 +36,7 @@ public:
     ~ArrangementView() override;
 
     void setURL (const juce::URL& url);
-    void setAnalysis (const SongAnalysis& analysis);
+    void setArrangement (const Arrangement& arrangement);
     void setZoomLevel (int level);
     void setFollowsTransport (bool shouldFollow) noexcept { followTransport = shouldFollow; }
     bool getFollowsTransport() const noexcept { return followTransport; }
@@ -49,8 +49,8 @@ public:
 private:
     juce::AudioTransportSource& transportSource;
 
-    SongAnalysis analysis;
-    juce::String songName;
+    Arrangement arrangement;
+    juce::String arrangementName;
     int zoomLevel = 1;
     int maxZoomLevel = 4;
     bool followTransport = false;

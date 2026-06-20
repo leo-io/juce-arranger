@@ -36,7 +36,7 @@ private:
     juce::TextButton startStopButton          { "Play/Stop" };
 
     juce::Label statusLabel;
-    SongAnalysis currentAnalysis;
+    Arrangement currentArrangement;
 
     std::unique_ptr<LogConsole> logConsole;
 

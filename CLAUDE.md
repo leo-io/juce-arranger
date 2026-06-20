@@ -4,9 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A JUCE GUI desktop app (C++17) that loads a song-analysis JSON file (BPM, beats,
+A JUCE GUI desktop app (C++17) that loads an arrangement-analysis JSON file (BPM, beats,
 downbeats, beat positions, segment labels) alongside its audio and presents an
-**arrangement view**: a zoomable, bar-by-bar grid of the song with section colour
+**arrangement view**: a zoomable, bar-by-bar grid with segment colour
 coding, selection, and a transport playhead that sweeps the grid during playback.
 
 The app opens a `.json` analysis file; the JSON's `path` field points at the audio
@@ -36,7 +36,7 @@ artifacts); prefer `build/`.
 
 `BarGridModel.h` contains an extensive `juce::UnitTest` suite under
 `#if JUCE_UNIT_TESTS` (covers `rebuild`, zoom level → bars-per-row mapping, ragged
-Section `cellBounds`, hit-testing, and the selection API). **`JUCE_UNIT_TESTS` is not
+Segment `cellBounds`, hit-testing, and the selection API). **`JUCE_UNIT_TESTS` is not
 currently defined in `CMakeLists.txt`, so these tests are not compiled or run by the
 default build.** To exercise them you must define the flag and add a
 `juce::UnitTestRunner` call to an entry point — there is no test target today. Keep new
@@ -47,22 +47,22 @@ model logic covered by extending this suite in the same `#if JUCE_UNIT_TESTS` bl
 The data flows **analysis JSON → model → grid component → view → main shell**, with
 the audio transport threaded through as a shared reference.
 
-- **`SongAnalysis`** (`SongAnalysis.h`, header-only) — the parsed analysis: `bpm`,
+- **`Arrangement`** (`Arrangement.h`, header-only) — the parsed arrangement: `bpm`,
   `beats`, `downbeats`, `beatPositions`, `segments`. `fromJsonFile` parses; `segmentAt`,
   `barNumberAt`, and `colourForLabel` are the query/lookup surface. This is the single
-  source of song structure consumed everywhere downstream.
+  source of arrangement structure consumed everywhere downstream.
 
 - **`BarGridModel`** (`BarGridModel.h`, header-only, **message-thread-only, no locks**) —
-  the pure data model for the grid. `rebuild()` turns analysis into a `bars` vector
+  the pure data model for the grid. `rebuild()` turns arrangement data into a `bars` vector
   (using downbeats, else synthesizing from BPM). The **zoom system** lives here:
   `applyZoom(level)` sets one of three `GridMode`s and derives the layout —
-  - `WholeSong` (level 0): entire song in one row.
-  - `Section` (level 1): one section per row, **ragged** rows of varying bar counts,
+  - `WholeArrangement` (level 0): entire arrangement in one row.
+  - `Segment` (level 1): one segment per row, **ragged** rows of varying bar counts,
     driven by a `rowSpans` table — this is the one mode that breaks uniform grid math.
   - `Fixed` (levels 2..N): uniform `barsPerRow = ceil(S / 2^(level-1))` where `S` is the
-    median section length in bars; level N reaches 1 bar/row.
+    median segment length in bars; level N reaches 1 bar/row.
   All geometry (`cellBounds`, `cellWidthForRow`, `rowCount`, hit-testing) consults
-  `rowSpans` in `Section` mode and uses uniform math otherwise. Selection is a
+  `rowSpans` in `Segment` mode and uses uniform math otherwise. Selection is a
   half-open `juce::Range<int>` of bar indices.
 
 - **`BarGridComponent`** (`.h/.cpp`) — the scrolled, custom-painted grid. Paints one

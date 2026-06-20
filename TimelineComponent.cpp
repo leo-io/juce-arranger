@@ -38,9 +38,9 @@ void TimelineComponent::setURL (const juce::URL& url)
     }
 }
 
-void TimelineComponent::setAnalysis (const SongAnalysis& newAnalysis)
+void TimelineComponent::setArrangement (const Arrangement& newArrangement)
 {
-    analysis = newAnalysis;
+    arrangement = newArrangement;
     repaint();
 }
 
@@ -79,7 +79,7 @@ void TimelineComponent::paint (juce::Graphics& g)
 
         if (thumbnail.getTotalLength() > 0.0)
         {
-            for (const auto& segment : analysis.segments)
+            for (const auto& segment : arrangement.segments)
             {
                 if (segment.end <= visibleRange.getStart() || segment.start >= visibleRange.getEnd())
                     continue;
@@ -89,7 +89,7 @@ void TimelineComponent::paint (juce::Graphics& g)
                 x1 = juce::jlimit (0.0f, (float)thumbArea.getWidth(), x1);
                 x2 = juce::jlimit (0.0f, (float)thumbArea.getWidth(), x2);
 
-                juce::Colour segColour = analysis.colourForLabel (segment.label);
+                juce::Colour segColour = arrangement.colourForLabel (segment.label);
                 g.setColour (segColour.withAlpha (0.25f));
                 g.fillRect (x1, (float)thumbArea.getY(), x2 - x1, (float)thumbArea.getHeight());
 
@@ -108,7 +108,7 @@ void TimelineComponent::paint (juce::Graphics& g)
                                    visibleRange.getStart(), visibleRange.getEnd(), 1.0f);
 
             int barNumber = 1;
-            for (const auto& downbeat : analysis.downbeats)
+            for (const auto& downbeat : arrangement.downbeats)
             {
                 if (downbeat < visibleRange.getStart() || downbeat > visibleRange.getEnd())
                 {

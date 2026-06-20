@@ -5,14 +5,14 @@
 #include <vector>
 #include <optional>
 #include <cmath>
-#include "SongAnalysis.h"
+#include "Arrangement.h"
 #include "Theme.h"
 
 //==============================================================================
 // Data structures for the bar grid model
 
 enum class LabelDetail { NumberAndLabel, NumberOnly, SparseNumber };
-enum class GridMode { WholeSong, Section, Fixed };
+enum class GridMode { WholeArrangement, Segment, Fixed };
 
 struct RowSpan
 {
@@ -25,8 +25,8 @@ struct Bar
     int          index1Based;    // 1-based bar number
     double       startTime;      // seconds
     double       endTime;        // seconds (clamped to total length for last bar)
-    juce::String segmentLabel;   // from analysis.segmentAt(startTime)
-    juce::Colour colour;         // from analysis.colourForLabel(segmentLabel)
+    juce::String segmentLabel;   // from arrangement.segmentAt(startTime)
+    juce::Colour colour;         // from arrangement.colourForLabel(segmentLabel)
     bool         isSegmentStart; // true iff label differs from previous bar's
 };
 
@@ -44,35 +44,35 @@ public:
     std::vector<RowSpan> rowSpans;
 
     //==========================================================================
-    // Rebuild: construct the bar list from analysis data (no barsPerRow — set via applyZoom)
+    // Rebuild: construct the bar list from arrangement data (no barsPerRow — set via applyZoom)
 
-    void rebuild (const SongAnalysis& analysis, double totalLengthSeconds)
+    void rebuild (const Arrangement& arrangement, double totalLengthSeconds)
     {
         bars.clear();
 
         // Determine bar boundaries
         std::vector<double> barStarts;
 
-        if (!analysis.downbeats.empty())
+        if (!arrangement.downbeats.empty())
         {
             // Primary: use downbeats as bar boundaries
-            barStarts = analysis.downbeats;
+            barStarts = arrangement.downbeats;
         }
-        else if (analysis.bpm > 0)
+        else if (arrangement.bpm > 0)
         {
             // Fallback: synthesize from BPM and beat positions
             int beatsPerBar = 4; // default 4/4
 
-            if (!analysis.beatPositions.empty())
+            if (!arrangement.beatPositions.empty())
             {
                 // Infer beats per bar from the max beat position seen
                 int maxBeatPos = 0;
-                for (int pos : analysis.beatPositions)
+                for (int pos : arrangement.beatPositions)
                     maxBeatPos = juce::jmax (maxBeatPos, pos);
                 beatsPerBar = juce::jmax (1, maxBeatPos + 1);
             }
 
-            double beatLengthSeconds = 60.0 / analysis.bpm;
+            double beatLengthSeconds = 60.0 / arrangement.bpm;
             double barLengthSeconds = beatLengthSeconds * beatsPerBar;
 
             for (double t = 0.0; t < totalLengthSeconds; t += barLengthSeconds)
@@ -98,13 +98,13 @@ public:
                 bar.endTime = totalLengthSeconds; // Last bar extends to end
 
             // Get segment info at the start of this bar
-            const Segment* seg = analysis.segmentAt (bar.startTime);
+            const Segment* seg = arrangement.segmentAt (bar.startTime);
             if (seg != nullptr)
                 bar.segmentLabel = seg->label;
             else
                 bar.segmentLabel = juce::String();
 
-            bar.colour = analysis.colourForLabel (bar.segmentLabel);
+            bar.colour = arrangement.colourForLabel (bar.segmentLabel);
 
             // Check if this is the start of a segment run
             bar.isSegmentStart = (i == 0) || (bar.segmentLabel != bars[i - 1].segmentLabel);
@@ -165,7 +165,7 @@ public:
         return juce::jmax (1, viewportWidth / juce::jmax (1, barsPerRow));
     }
 
-    int cellWidthForBarSection (int barIndexZeroBased, int viewportWidth) const
+    int cellWidthForBarSegment (int barIndexZeroBased, int viewportWidth) const
     {
         auto span = getSegmentSpanForBar (barIndexZeroBased);
         return juce::jmax (1, viewportWidth / juce::jmax (1, span.barCount));
@@ -176,7 +176,7 @@ public:
         if (bars.empty())
             return 1;
 
-        if (mode == GridMode::Section && !rowSpans.empty())
+        if (mode == GridMode::Segment && !rowSpans.empty())
             return (int)rowSpans.size();
 
         return (int)std::ceil (bars.size() / (double)barsPerRow);
@@ -189,7 +189,7 @@ public:
 
     int cellWidthForRow (int rowIndex, int viewportWidth) const
     {
-        if (mode == GridMode::Section && rowIndex >= 0 && rowIndex < (int)rowSpans.size())
+        if (mode == GridMode::Segment && rowIndex >= 0 && rowIndex < (int)rowSpans.size())
             return juce::jmax (1, viewportWidth / juce::jmax (1, rowSpans[rowIndex].barCount));
 
         return cellWidth (viewportWidth);
@@ -200,7 +200,7 @@ public:
         if (barIndexZeroBased < 0 || barIndexZeroBased >= (int)bars.size())
             return juce::Rectangle<int>();
 
-        if (mode == GridMode::Section && !rowSpans.empty())
+        if (mode == GridMode::Segment && !rowSpans.empty())
         {
             // Find which row this bar belongs to
             for (size_t r = 0; r < rowSpans.size(); ++r)
@@ -217,7 +217,7 @@ public:
             return juce::Rectangle<int>();
         }
 
-        // Fixed and WholeSong: uniform cell width
+        // Fixed and WholeArrangement: uniform cell width
         int bpRow = juce::jmax (1, barsPerRow);
         int cw  = juce::jmax (1, viewportWidth / bpRow);
         int col = barIndexZeroBased % bpRow;
@@ -235,7 +235,7 @@ public:
 
         int row = p.y / Spacing::rowHeight;
 
-        if (mode == GridMode::Section && !rowSpans.empty())
+        if (mode == GridMode::Segment && !rowSpans.empty())
         {
             if (row < 0 || row >= (int)rowSpans.size())
                 return std::nullopt;
@@ -255,7 +255,7 @@ public:
             return barIndex;
         }
 
-        // WholeSong and Fixed: hit testing via cellBounds
+        // WholeArrangement and Fixed: hit testing via cellBounds
         if (row < 0 || row >= rowCount())
             return std::nullopt;
 
@@ -284,7 +284,7 @@ public:
 
         int row = juce::jlimit (0, rowCount() - 1, p.y / Spacing::rowHeight);
 
-        if (mode == GridMode::Section && !rowSpans.empty())
+        if (mode == GridMode::Segment && !rowSpans.empty())
         {
             if (row >= (int)rowSpans.size())
                 row = (int)rowSpans.size() - 1;
@@ -298,7 +298,7 @@ public:
             return juce::jlimit (0, (int)bars.size() - 1, barIndex);
         }
 
-        // WholeSong and Fixed: clamp to nearest valid bar
+        // WholeArrangement and Fixed: clamp to nearest valid bar
         int rowStartBar = row * barsPerRow;
         int rowEndBar = juce::jmin ((row + 1) * barsPerRow, (int)bars.size());
 
@@ -334,60 +334,60 @@ public:
     //==========================================================================
     // Zoom / mode helpers
 
-    /** Median section length in bars, used to derive zoom step sizes. */
-    int medianSectionBars (const SongAnalysis& analysis) const
+    /** Median segment length in bars, used to derive zoom step sizes. */
+    int medianSegmentBars (const Arrangement& arrangement) const
     {
-        if (analysis.segments.empty() || analysis.downbeats.empty())
+        if (arrangement.segments.empty() || arrangement.downbeats.empty())
             return 8;
 
-        std::vector<int> sectionBars;
-        for (const auto& seg : analysis.segments)
+        std::vector<int> segmentBars;
+        for (const auto& seg : arrangement.segments)
         {
             int count = 0;
-            for (double db : analysis.downbeats)
+            for (double db : arrangement.downbeats)
             {
                 if (db >= seg.start && db < seg.end)
                     ++count;
             }
             if (count > 0)
-                sectionBars.push_back (count);
+                segmentBars.push_back (count);
         }
 
-        if (sectionBars.empty())
+        if (segmentBars.empty())
             return 8;
 
-        std::sort (sectionBars.begin(), sectionBars.end());
-        return sectionBars[sectionBars.size() / 2];
+        std::sort (segmentBars.begin(), segmentBars.end());
+        return segmentBars[segmentBars.size() / 2];
     }
 
     /** Maximum zoom level, where one bar fills one row. */
-    int maxZoomLevel (const SongAnalysis& analysis) const
+    int maxZoomLevel (const Arrangement& arrangement) const
     {
         if (bars.empty())
             return 0;
-        int S = medianSectionBars (analysis);
+        int S = medianSegmentBars (arrangement);
         if (S <= 1)
-            return 2; // Song + Section + Bar
+            return 2; // Song + Segment + Bar
         return 1 + (int)std::ceil (std::log2 ((double)S));
     }
 
     /** Human-readable name for a zoom level (used in the toolbar chip). */
     static juce::String zoomLevelName (int level, int maxLevel)
     {
-        if (level == 0) return "Song";
-        if (level == 1) return "Section";
+        if (level == 0) return "Arrangement";
+        if (level == 1) return "Segment";
         if (level >= maxLevel) return "Bar";
 
-        // Intermediate levels: 1/2, 1/4, 1/8, ... Section
+        // Intermediate levels: 1/2, 1/4, 1/8, ... Segment
         int denom = 1 << (level - 1);
-        return "1/" + juce::String (denom) + " Section";
+        return "1/" + juce::String (denom) + " Segment";
     }
 
     /** Apply a zoom level, setting mode, barsPerRow, and rowSpans accordingly. */
-    void applyZoom (const SongAnalysis& analysis, int level, double /*totalLen*/)
+    void applyZoom (const Arrangement& arrangement, int level, double /*totalLen*/)
     {
         zoomLevel = juce::jmax (0, level);
-        int maxLvl = maxZoomLevel (analysis);
+        int maxLvl = maxZoomLevel (arrangement);
         zoomLevel = juce::jmin (maxLvl, zoomLevel);
         rowSpans.clear();
 
@@ -400,30 +400,30 @@ public:
 
         if (zoomLevel == 0)
         {
-            // WholeSong: one row, all bars
-            mode = GridMode::WholeSong;
+            // WholeArrangement: one row, all bars
+            mode = GridMode::WholeArrangement;
             barsPerRow = (int)bars.size();
         }
         else if (zoomLevel == 1)
         {
-            // Section-aligned ragged rows
-            mode = GridMode::Section;
-            barsPerRow = 0; // not used in Section mode
-            buildRowSpans (analysis);
+            // Segment-aligned ragged rows
+            mode = GridMode::Segment;
+            barsPerRow = 0; // not used in Segment mode
+            buildRowSpans (arrangement);
         }
         else
         {
             // Fixed bars-per-row: ceil(S / 2^(level-1))
             mode = GridMode::Fixed;
-            int S = medianSectionBars (analysis);
+            int S = medianSegmentBars (arrangement);
             if (S <= 0) S = 8;
             int exponent = zoomLevel - 1;
             barsPerRow = juce::jmax (1, (int)std::ceil (S / std::pow (2.0, exponent)));
         }
     }
 
-    /** Build rowSpans from analysis segments for Section mode. */
-    void buildRowSpans (const SongAnalysis& analysis)
+    /** Build rowSpans from arrangement segments for Segment mode. */
+    void buildRowSpans (const Arrangement& arrangement)
     {
         rowSpans.clear();
 
@@ -433,9 +433,9 @@ public:
             return;
         }
 
-        if (!analysis.segments.empty())
+        if (!arrangement.segments.empty())
         {
-            for (const auto& seg : analysis.segments)
+            for (const auto& seg : arrangement.segments)
             {
                 int firstBar = -1;
                 int lastBar  = -1;
@@ -473,7 +473,7 @@ public:
         if (barIndexZeroBased < 0 || barIndexZeroBased >= (int)bars.size())
             return 0;
 
-        if (mode == GridMode::Section && !rowSpans.empty())
+        if (mode == GridMode::Segment && !rowSpans.empty())
         {
             for (size_t i = 0; i < rowSpans.size(); ++i)
             {
@@ -597,7 +597,7 @@ public:
             testLabelDetail();
             testSelection();
             testApplyZoom();
-            testMedianSectionBars();
+            testMedianSegmentBars();
             testZoomLevelNames();
         }
 
@@ -606,13 +606,13 @@ public:
         {
             beginTest ("rebuild with downbeats");
 
-            SongAnalysis analysis;
-            analysis.bpm = 120.0;
-            analysis.downbeats = { 0.0, 0.5, 1.0, 1.5 };
-            analysis.segments.push_back ({ 0.0, 2.0, "verse" });
+            Arrangement arrangement;
+            arrangement.bpm = 120.0;
+            arrangement.downbeats = { 0.0, 0.5, 1.0, 1.5 };
+            arrangement.segments.push_back ({ 0.0, 2.0, "verse" });
 
             BarGridModel model;
-            model.rebuild (analysis, 2.0);
+            model.rebuild (arrangement, 2.0);
             model.barsPerRow = 8; // set display param directly for tests
 
             expect (model.bars.size() == 4, "Should have 4 bars from 4 downbeats");
@@ -627,13 +627,13 @@ public:
         {
             beginTest ("rebuild fallback synthesis");
 
-            SongAnalysis analysis;
-            analysis.bpm = 120.0;
-            analysis.beatPositions = { 0, 1, 2, 3 }; // 4/4
+            Arrangement arrangement;
+            arrangement.bpm = 120.0;
+            arrangement.beatPositions = { 0, 1, 2, 3 }; // 4/4
             // No downbeats - will synthesize
 
             BarGridModel model;
-            model.rebuild (analysis, 2.0); // 2 seconds = 2 bars at 120 BPM
+            model.rebuild (arrangement, 2.0); // 2 seconds = 2 bars at 120 BPM
             model.barsPerRow = 8;
 
             expect (!model.bars.empty(), "Fallback should synthesize bars");
@@ -644,11 +644,11 @@ public:
         {
             beginTest ("rebuild placeholder (no data)");
 
-            SongAnalysis analysis;
-            analysis.bpm = 0.0; // No BPM - placeholder
+            Arrangement arrangement;
+            arrangement.bpm = 0.0; // No BPM - placeholder
 
             BarGridModel model;
-            model.rebuild (analysis, 10.0);
+            model.rebuild (arrangement, 10.0);
 
             expect (model.bars.empty(), "Should have no bars with no BPM and no downbeats");
         }
@@ -748,68 +748,68 @@ public:
         {
             beginTest ("applyZoom");
 
-            SongAnalysis analysis;
-            analysis.bpm = 120.0;
-            analysis.downbeats = { 0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5,
+            Arrangement arrangement;
+            arrangement.bpm = 120.0;
+            arrangement.downbeats = { 0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5,
                                    4.0, 4.5, 5.0, 5.5, 6.0, 6.5, 7.0, 7.5 };
-            analysis.segments.push_back ({ 0.0, 4.0, "verse" });  // 8 bars
-            analysis.segments.push_back ({ 4.0, 8.0, "chorus" }); // 8 bars
+            arrangement.segments.push_back ({ 0.0, 4.0, "verse" });  // 8 bars
+            arrangement.segments.push_back ({ 4.0, 8.0, "chorus" }); // 8 bars
 
             BarGridModel model;
-            model.rebuild (analysis, 8.0);
+            model.rebuild (arrangement, 8.0);
             expect (model.bars.size() == 16, "16 bars from 16 downbeats");
 
-            // Level 0: WholeSong
-            model.applyZoom (analysis, 0, 8.0);
-            expect (model.mode == GridMode::WholeSong, "Level 0 = WholeSong");
+            // Level 0: WholeArrangement
+            model.applyZoom (arrangement, 0, 8.0);
+            expect (model.mode == GridMode::WholeArrangement, "Level 0 = WholeArrangement");
             expect (model.barsPerRow == 16, "16 bars per row for 16-bar song");
 
-            // Level 1: Section
-            model.applyZoom (analysis, 1, 8.0);
-            expect (model.mode == GridMode::Section, "Level 1 = Section");
+            // Level 1: Segment
+            model.applyZoom (arrangement, 1, 8.0);
+            expect (model.mode == GridMode::Segment, "Level 1 = Segment");
             expect (model.rowSpans.size() == 2, "2 rows for 2 segments");
             if (model.rowSpans.size() >= 2)
             {
-                expect (model.rowSpans[0].barCount == 8, "First section 8 bars");
-                expect (model.rowSpans[1].barCount == 8, "Second section 8 bars");
+                expect (model.rowSpans[0].barCount == 8, "First segment 8 bars");
+                expect (model.rowSpans[1].barCount == 8, "Second segment 8 bars");
             }
 
             // Level 2: Fixed, ceil(S/2) = 4 bars/row
-            model.applyZoom (analysis, 2, 8.0);
+            model.applyZoom (arrangement, 2, 8.0);
             expect (model.mode == GridMode::Fixed, "Level 2 = Fixed");
             expect (model.barsPerRow == 4, "4 bars per row for S=8 at level 2");
 
             // Level N (max): Bar mode
-            int maxLvl = model.maxZoomLevel (analysis);
-            model.applyZoom (analysis, maxLvl, 8.0);
+            int maxLvl = model.maxZoomLevel (arrangement);
+            model.applyZoom (arrangement, maxLvl, 8.0);
             expect (model.mode == GridMode::Fixed, "Max level = Fixed");
             expect (model.barsPerRow == 1, "Max level bar-per-row = 1");
         }
 
-        void testMedianSectionBars()
+        void testMedianSegmentBars()
         {
-            beginTest ("medianSectionBars");
+            beginTest ("medianSegmentBars");
 
-            SongAnalysis analysis;
-            analysis.bpm = 120.0;
+            Arrangement arrangement;
+            arrangement.bpm = 120.0;
             // 16 quarter-note downbeats = 16 bars
             for (int i = 0; i < 16; ++i)
-                analysis.downbeats.push_back (i * 0.5);
+                arrangement.downbeats.push_back (i * 0.5);
 
-            // Two sections: 8 bars and 8 bars → median = 8
-            analysis.segments.push_back ({ 0.0, 4.0, "verse" });
-            analysis.segments.push_back ({ 4.0, 8.0, "chorus" });
+            // Two segments: 8 bars and 8 bars → median = 8
+            arrangement.segments.push_back ({ 0.0, 4.0, "verse" });
+            arrangement.segments.push_back ({ 4.0, 8.0, "chorus" });
 
             BarGridModel model;
-            model.rebuild (analysis, 8.0);
+            model.rebuild (arrangement, 8.0);
 
-            int median = model.medianSectionBars (analysis);
-            expect (median == 8, "Median section bars = 8 for two 8-bar sections");
+            int median = model.medianSegmentBars (arrangement);
+            expect (median == 8, "Median segment bars = 8 for two 8-bar segments");
 
             // Empty segments → default 8
-            SongAnalysis emptyAnalysis;
-            emptyAnalysis.bpm = 120.0;
-            int defaultMedian = model.medianSectionBars (emptyAnalysis);
+            Arrangement emptyArrangement;
+            emptyArrangement.bpm = 120.0;
+            int defaultMedian = model.medianSegmentBars (emptyArrangement);
             expect (defaultMedian == 8, "Default median = 8 with no segments");
         }
 
@@ -817,13 +817,13 @@ public:
         {
             beginTest ("zoomLevelNames");
 
-            expect (BarGridModel::zoomLevelName (0, 4) == "Song");
-            expect (BarGridModel::zoomLevelName (1, 4) == "Section");
+            expect (BarGridModel::zoomLevelName (0, 4) == "Arrangement");
+            expect (BarGridModel::zoomLevelName (1, 4) == "Segment");
             expect (BarGridModel::zoomLevelName (4, 4) == "Bar");
 
-            // Level 2 for S=8 → 1/2 Section
+            // Level 2 for S=8 → 1/2 Segment
             auto name2 = BarGridModel::zoomLevelName (2, 4);
-            expect (name2.contains ("Section"), "Level 2 name contains 'Section'");
+            expect (name2.contains ("Segment"), "Level 2 name contains 'Segment'");
         }
 
         void testSelection()

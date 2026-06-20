@@ -27,7 +27,7 @@ ArrangementView::ArrangementView (juce::AudioFormatManager& formatManager,
     zoomChip.setEditable (false, false, false);
     zoomChip.setColour (juce::Label::backgroundColourId, Palette::zoomChipBg);
     zoomChip.setColour (juce::Label::textColourId, Palette::textSecondary);
-    zoomChip.setText ("Zoom: Section", juce::dontSendNotification);
+    zoomChip.setText ("Zoom: Segment", juce::dontSendNotification);
 
     // Wire grid zoom request (Ctrl+wheel, keyboard)
     grid->onZoomRequest = [this] (int delta, int anchorBar)
@@ -35,7 +35,7 @@ ArrangementView::ArrangementView (juce::AudioFormatManager& formatManager,
         try
         {
             int newLevel = zoomLevel + delta;
-            // Handle the Ctrl+0 "reset to song" case
+            // Handle the Ctrl+0 "reset to arrangement overview" case
             if (delta <= -100)
                 newLevel = 0;
             newLevel = juce::jlimit (0, maxZoomLevel, newLevel);
@@ -84,17 +84,23 @@ ArrangementView::~ArrangementView()
 
 void ArrangementView::setURL (const juce::URL& url)
 {
-    songName = url.getLocalFile().getFileNameWithoutExtension();
+    // Store the filename as a fallback; overridden by arrangement.name in setArrangement
+    arrangementName = url.getLocalFile().getFileNameWithoutExtension();
     repaint();
 }
 
-void ArrangementView::setAnalysis (const SongAnalysis& newAnalysis)
+void ArrangementView::setArrangement (const Arrangement& newArrangement)
 {
-    analysis = newAnalysis;
-    model.rebuild (analysis, transportSource.getLengthInSeconds());
-    model.applyZoom (analysis, zoomLevel, transportSource.getLengthInSeconds());
+    arrangement = newArrangement;
 
-    maxZoomLevel = model.maxZoomLevel (analysis);
+    // Prefer the name embedded in the JSON; keep the filename fallback set in setURL
+    if (!arrangement.name.isEmpty())
+        arrangementName = arrangement.name;
+
+    model.rebuild (arrangement, transportSource.getLengthInSeconds());
+    model.applyZoom (arrangement, zoomLevel, transportSource.getLengthInSeconds());
+
+    maxZoomLevel = model.maxZoomLevel (arrangement);
     zoomLevel = juce::jmin (zoomLevel, maxZoomLevel);
 
     if (grid)
@@ -114,7 +120,7 @@ void ArrangementView::setZoomLevel (int level)
 
     zoomLevel = level;
 
-    model.applyZoom (analysis, zoomLevel, transportSource.getLengthInSeconds());
+    model.applyZoom (arrangement, zoomLevel, transportSource.getLengthInSeconds());
 
     if (grid)
         grid->refresh();
@@ -149,7 +155,7 @@ void ArrangementView::zoomAroundAnchor (int newLevel, int anchorBar, int /*curso
     newLevel = juce::jlimit (0, maxZoomLevel, newLevel);
     zoomLevel = newLevel;
 
-    model.applyZoom (analysis, zoomLevel, transportSource.getLengthInSeconds());
+    model.applyZoom (arrangement, zoomLevel, transportSource.getLengthInSeconds());
 
     if (grid)
         grid->refresh();
@@ -183,13 +189,13 @@ void ArrangementView::paint (juce::Graphics& g)
         g.setColour (Palette::surfaceElevated);
         g.fillRect (headerBounds);
 
-        // Left: "ARRANGEMENT · "song_name""
+        // Left: "ARRANGEMENT · "arrangement_name""
         auto leftHeader = headerBounds.removeFromLeft (headerBounds.getWidth() / 2);
         g.setColour (Palette::textPrimary);
         g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
         juce::String headerText = "ARRANGEMENT";
-        if (! songName.isEmpty())
-            headerText += " \u00b7 \"" + songName + "\"";
+        if (! arrangementName.isEmpty())
+            headerText += " \u00b7 \"" + arrangementName + "\"";
         g.drawText (headerText, leftHeader.reduced (Spacing::pad, 0),
                     juce::Justification::centredLeft, true);
 
@@ -198,18 +204,18 @@ void ArrangementView::paint (juce::Graphics& g)
 
         // Time signature
         int beatsPerBar = 4;
-        if (!analysis.beatPositions.empty())
+        if (!arrangement.beatPositions.empty())
         {
             int maxBeatPos = 0;
-            for (int pos : analysis.beatPositions)
+            for (int pos : arrangement.beatPositions)
                 maxBeatPos = juce::jmax (maxBeatPos, pos);
             beatsPerBar = maxBeatPos + 1;
         }
         juce::String infoText = juce::String (beatsPerBar) + "/4";
 
         // BPM
-        if (analysis.bpm > 0.0)
-            infoText += juce::String::formatted ("   %.0f BPM", analysis.bpm);
+        if (arrangement.bpm > 0.0)
+            infoText += juce::String::formatted ("   %.0f BPM", arrangement.bpm);
 
         // Bar count
         int barCount = (int) model.bars.size();
@@ -224,10 +230,10 @@ void ArrangementView::paint (juce::Graphics& g)
 
         // Colour legend — collect unique segment labels
         auto legendArea = rightHeader;
-        if (!analysis.segments.empty())
+        if (!arrangement.segments.empty())
         {
             std::vector<juce::String> uniqueLabels;
-            for (const auto& seg : analysis.segments)
+            for (const auto& seg : arrangement.segments)
             {
                 if (! seg.label.isEmpty())
                 {
@@ -259,7 +265,7 @@ void ArrangementView::paint (juce::Graphics& g)
                 for (size_t i = 0; i < uniqueLabels.size(); ++i)
                 {
                     const auto& label = uniqueLabels[i];
-                    juce::Colour swatchColour = analysis.colourForLabel (label);
+                    juce::Colour swatchColour = arrangement.colourForLabel (label);
 
                     auto swatchRect = juce::Rectangle<int> (legendX,
                                                             legendArea.getCentreY() - swatchSize / 2,
@@ -414,7 +420,7 @@ void ArrangementView::timerCallback()
             return;
         }
 
-        int barNum = analysis.barNumberAt (pos);  // 1-based
+        int barNum = arrangement.barNumberAt (pos);  // 1-based
 
         if (barNum > 0 && barNum <= (int)model.bars.size())
         {
